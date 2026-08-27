@@ -1,0 +1,120 @@
+- [WindowControl] Name: '微信' | Class: 'mmui::MainWindow' | HWND: 1968418
+  - [GroupControl] Name: '' | Class: 'QWidget' | HWND: 0
+    - [CustomControl] Name: '' | Class: 'QStackedWidget' | HWND: 0
+      - [GroupControl] Name: '' | Class: 'mmui::MainView' | HWND: 0
+        - [ToolBarControl] Name: '导航' | Class: 'mmui::MainTabBar' | HWND: 0
+          - [ButtonControl] Name: '微信' | Class: 'mmui::XTabBarItem' | HWND: 0
+            - [GroupControl] Name: '' | Class: 'QWidget' | HWND: 0
+              - [ButtonControl] Name: '' | Class: 'mmui::XImage' | HWND: 0
+            - [GroupControl] Name: '' | Class: 'mmui::XSkiaWidget' | HWND: 0
+          - [ButtonControl] Name: '通讯录' | Class: 'mmui::XTabBarItem' | HWND: 0
+            - [GroupControl] Name: '' | Class: 'QWidget' | HWND: 0
+              - [ButtonControl] Name: '' | Class: 'mmui::XImage' | HWND: 0
+            - [GroupControl] Name: '' | Class: 'mmui::XSkiaWidget' | HWND: 0
+          - [ButtonControl] Name: '收藏' | Class: 'mmui::XTabBarItem' | HWND: 0
+            - [GroupControl] Name: '' | Class: 'QWidget' | HWND: 0
+              - [ButtonControl] Name: '' | Class: 'mmui::XImage' | HWND: 0
+            - [GroupControl] Name: '' | Class: 'mmui::XSkiaWidget' | HWND: 0
+          - [ButtonControl] Name: '朋友圈' | Class: 'mmui::XTabBarItem' | HWND: 0
+            - [GroupControl] Name: '' | Class: 'QWidget' | HWND: 0
+              - [ButtonControl] Name: '' | Class: 'mmui::XImage' | HWND: 0
+            - [GroupControl] Name: '' | Class: 'mmui::XSkiaWidget' | HWND: 0
+          - [ButtonControl] Name: '视频号' | Class: 'mmui::XTabBarItem' | HWND: 0
+            - [GroupControl] Name: '' | Class: 'QWidget' | HWND: 0
+              - [ButtonControl] Name: '' | Class: 'mmui::XImage' | HWND: 0
+            - [GroupControl] Name: '' | Class: 'mmui::XSkiaWidget' | HWND: 0
+          - [ButtonControl] Name: '搜一搜' | Class: 'mmui::XTabBarItem' | HWND: 0
+            - [GroupControl] Name: '' | Class: 'QWidget' | HWND: 0
+              - [ButtonControl] Name: '' | Class: 'mmui::XImage' | HWND: 0
+            - [GroupControl] Name: '' | Class: 'mmui::XSkiaWidget' | HWND: 0
+          - [ButtonControl] Name: '更多' | Class: 'mmui::XTabBarItem' | HWND: 0
+            - [GroupControl] Name: '' | Class: 'QWidget' | HWND: 0
+              - [ButtonControl] Name: '' | Class: 'mmui::XImage' | HWND: 0
+            - [GroupControl] Name: '' | Class: 'mmui::XSkiaWidget' | HWND: 0
+          - [ButtonControl] Name: '手机' | Class: 'mmui::HandoffTabbarView' | HWND: 0
+            - [ButtonControl] Name: '手机' | Class: 'mmui::XButton' | HWND: 0
+              - [GroupControl] Name: '' | Class: 'QWidget' | HWND: 0
+                - [ButtonControl] Name: '' | Class: 'mmui::XImage' | HWND: 0
+          - [ButtonControl] Name: '更多' | Class: 'mmui::MainTabBarSettingView' | HWND: 0
+            - [ButtonControl] Name: '更多' | Class: 'mmui::XButton' | HWND: 0
+              - [GroupControl] Name: '' | Class: 'QWidget' | HWND: 0
+                - [ButtonControl] Name: '' | Class: 'mmui::XImage' | HWND: 0
+        - [GroupControl] Name: '' | Class: 'QWidget' | HWND: 0
+          - [GroupControl] Name: '' | Class: 'mmui::MainView' | HWND: 0
+            - [CustomControl] Name: '' | Class: 'mmui::XSplitterView' | HWND: 0
+              - [CustomControl] Name: '' | Class: 'mmui::XStackedWidget' | HWND: 0
+                - [CustomControl] Name: '' | Class: 'mmui::XSplitterView' | HWND: 0
+                  - [CustomControl] Name: '' | Class: 'mmui::XStackedWidget' | HWND: 0
+                    - [GroupControl] Name: '' | Class: 'mmui::ChatDetailView' | HWND: 0
+                      - [CustomControl] Name: '' | Class: 'mmui::XSplitterView' | HWND: 0
+                        - [CustomControl] Name: '' | Class: 'mmui::XStackedWidget' | HWND: 0
+                          - [GroupControl] Name: '' | Class: 'mmui::ChatPage' | HWND: 0
+                            - [GroupControl] Name: '' | Class: 'QWidget' | HWND: 0
+                              - [ButtonControl] Name: '' | Class: 'mmui::XImage' | HWND: 0
+                  - [GroupControl] Name: '' | Class: 'mmui::XView' | HWND: 0
+                    - [GroupControl] Name: '' | Class: 'mmui::ChatMasterView' | HWND: 0
+                      - [GroupControl] Name: '' | Class: 'mmui::XView' | HWND: 0
+                        - [GroupControl] Name: '' | Class: 'mmui::XView' | HWND: 0
+                          - [ButtonControl] Name: '快捷操作' | Class: 'mmui::XButton' | HWND: 0
+                            - [GroupControl] Name: '' | Class: 'QWidget' | HWND: 0
+                              - [ButtonControl] Name: '' | Class: 'mmui::XImage' | HWND: 0
+                          - [GroupControl] Name: '' | Class: 'mmui::XSearchField' | HWND: 0
+                            - [GroupControl] Name: '' | Class: 'QWidget' | HWND: 0
+                              - [ButtonControl] Name: '' | Class: 'mmui::XImage' | HWND: 0
+                            - [EditControl] Name: '搜索' | Class: 'mmui::XValidatorTextEdit' | HWND: 0
+                              - [GroupControl] Name: '' | Class: 'QWidget' | HWND: 0
+                          - [GroupControl] Name: '' | Class: 'mmui::XDivider' | HWND: 0
+                        - [GroupControl] Name: '' | Class: 'mmui::XView' | HWND: 0
+                          - [GroupControl] Name: '' | Class: 'mmui::XView' | HWND: 0
+                            - [GroupControl] Name: '' | Class: 'mmui::ChatSessionList' | HWND: 0
+                              - [ListControl] Name: '会话' | Class: 'mmui::XTableView' | HWND: 0
+                                - [ListItemControl] Name: '文件传输助手
+
+
+' | Class: 'mmui::ChatSessionCell' | HWND: 0
+                                - [ListItemControl] Name: '大丑
+渥奇: @小丑 测试
+14:27
+消息免打扰
+' | Class: 'mmui::ChatSessionCell' | HWND: 0
+                                - [ListItemControl] Name: '腾讯新闻
+[2条] 
+清华一本科生被公告退学处理，“因穷尽其他送达方式后仍无法送达本通知，特予公告送达”
+13:36
+' | Class: 'mmui::ChatSessionCell' | HWND: 0
+                                - [ListItemControl] Name: '渥奇
+[3条] 
+DPK202771898866
+13:21
+' | Class: 'mmui::ChatSessionCell' | HWND: 0
+                                - [ListItemControl] Name: '小丑
+W.: 我明天要猛攻了
+昨天 21:30
+' | Class: 'mmui::ChatSessionCell' | HWND: 0
+                                - [ListItemControl] Name: 'B-501
+Twixtor: 江湖再见了兄弟们
+06/26
+' | Class: 'mmui::ChatSessionCell' | HWND: 0
+                                - [ListItemControl] Name: '积佳口腔（营业9:00-18:00）
+
+
+' | Class: 'mmui::ChatSessionCell' | HWND: 0
+                                - [ListItemControl] Name: 'A瓷城口腔医院程助理19047989309
+
+
+' | Class: 'mmui::ChatSessionCell' | HWND: 0
+                  - [ThumbControl] Name: '' | Class: 'QSplitterHandle' | HWND: 0
+    - [ToolBarControl] Name: '' | Class: 'mmui::TitleBar' | HWND: 0
+      - [ButtonControl] Name: '置顶' | Class: 'mmui::PinnedButton' | HWND: 0
+        - [GroupControl] Name: '' | Class: 'QWidget' | HWND: 0
+          - [ButtonControl] Name: '' | Class: 'mmui::XImage' | HWND: 0
+      - [ButtonControl] Name: '最小化' | Class: 'mmui::XButton' | HWND: 0
+        - [GroupControl] Name: '' | Class: 'QWidget' | HWND: 0
+          - [ButtonControl] Name: '' | Class: 'mmui::XImage' | HWND: 0
+      - [ButtonControl] Name: '最大化' | Class: 'mmui::XButton' | HWND: 0
+        - [GroupControl] Name: '' | Class: 'QWidget' | HWND: 0
+          - [ButtonControl] Name: '' | Class: 'mmui::XImage' | HWND: 0
+      - [ButtonControl] Name: '关闭' | Class: 'mmui::XButton' | HWND: 0
+        - [GroupControl] Name: '' | Class: 'QWidget' | HWND: 0
+          - [ButtonControl] Name: '' | Class: 'mmui::XImage' | HWND: 0
+    - [GroupControl] Name: '' | Class: 'QWidget' | HWND: 2494188
