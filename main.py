@@ -3,8 +3,9 @@
 微信智能机器人主编排中枢 (Industrial Producer-Consumer Orchestrator)
 架构模式:
 1. Watcher (生产者线程): 毫秒级无阻塞监听尾部游标 (High-Water Mark)
-2. Worker (消费者线程): 消费队列消息 -> 防抖合并 -> LLM 推理 -> 静默发送
-3. Storage (持久化层): 逻辑指纹去重与断路保护
+2. Worker (消费者线程): 防抖合并 -> 图片/视觉处理 -> LLM 推理 -> 静默发送
+3. Context (上下文管理): 15分钟 TTL 衰减与多轮滑动窗口
+4. Storage (持久化层): 逻辑指纹去重与断路保护
 """
 import logging
 import os
@@ -32,6 +33,7 @@ from core.domain import ChatMessage, BotReply
 from core.storage import MessageRepository
 from core.brain import DecisionBrain
 from core.ocr_engine import OCREngine
+from core.image_locator import WeChatImageLocator
 from core.wechat_driver import WeChatDriver
 
 # 日志初始化
@@ -51,6 +53,7 @@ class WeChatBotEngine:
         self.storage = MessageRepository(self.cfg.db_path)
         self.brain = DecisionBrain(self.cfg)
         self.ocr = OCREngine(enabled=self.cfg.enable_ocr)
+        self.img_locator = WeChatImageLocator()
 
         self.event_queue = queue.Queue()
         self.running = False
@@ -62,7 +65,7 @@ class WeChatBotEngine:
         logger.info("==========================================")
         logger.info(f" 微信智能机器人引擎已启动 (工业级生产-消费架构)")
         logger.info(f" 目标会话: {self.cfg.target_chat} | 机器人名: {self.cfg.bot_name}")
-        logger.info(f" 模型: {self.cfg.llm_model} | OCR: {'启用' if self.cfg.enable_ocr else '关闭'}")
+        logger.info(f" 模型: {self.cfg.llm_model} | 视觉/OCR: {'启用' if self.cfg.enable_ocr else '关闭'}")
         logger.info("==========================================")
 
         self.storage.cleanup_old_records()
@@ -129,9 +132,8 @@ class WeChatBotEngine:
                         if not self.storage.is_processed(fp):
                             self.storage.mark_processed(fp, msg.content)
                             trace_id = f"trace_{uuid.uuid4().hex[:6]}"
-                            logger.info(f"[{trace_id}][Watcher] 捕获到全新未读消息: {msg.content}")
+                            logger.info(f"[{trace_id}][Watcher] 捕获到全新未读消息 (类型: {msg.msg_type}): {msg.content}")
                             self.event_queue.put((trace_id, msg))
-                            last_known_fp = fp
 
                 except Exception as e:
                     logger.error(f"[Watcher] 监听循环异常: {e}", exc_info=True)
@@ -139,7 +141,7 @@ class WeChatBotEngine:
                 time.sleep(0.6)
 
     def _worker_loop(self):
-        """消费者线程：防抖消费队列、调用大模型推理、执行静默投递"""
+        """消费者线程：防抖消费队列、图片定位与视觉/OCR推理、执行静默投递"""
         with auto.UIAutomationInitializerInThread():
             driver = WeChatDriver(self.cfg)
             while self.running:
@@ -160,9 +162,29 @@ class WeChatBotEngine:
                         break
 
                 try:
-                    # 调用决策大脑生成回复
+                    # 检查是否有图片消息
+                    has_image = any(m.msg_type == "image" or "[图片]" in m.content for m in batch_messages)
+                    image_path = None
+                    image_ocr_text = None
+
+                    if has_image:
+                        # 自动寻找微信最近 30 秒内落盘的图片
+                        image_path = self.img_locator.find_latest_image(max_age_seconds=30.0)
+                        if image_path:
+                            logger.info(f"[{trace_id}][Vision] 成功锁定微信最新落盘图片: {image_path.name}")
+                            if self.cfg.enable_ocr:
+                                image_ocr_text = self.ocr.extract_text(image_path)
+                                if image_ocr_text:
+                                    logger.info(f"[{trace_id}][OCR] 成功提取图片文字 ({len(image_ocr_text)} 字符)")
+                        else:
+                            logger.info(f"[{trace_id}][Vision] 收到图片气泡，未检测到本地落盘文件，使用图文上下文处理")
+
+                    # 调用决策大脑生成回复 (带多轮上下文与视觉传图)
                     reply = self.brain.generate_reply(
                         messages=batch_messages,
+                        session_id=self.cfg.target_chat,
+                        image_path=image_path,
+                        image_ocr_text=image_ocr_text,
                         trace_id=trace_id
                     )
 
