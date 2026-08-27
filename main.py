@@ -44,6 +44,7 @@ class WeChatBot:
         self.ocr = OCREngine(enabled=self.cfg.enable_ocr)
         self.driver = WeChatDriver(self.cfg)
         self._running = False
+        self._last_bind_status = False
 
     def start(self):
         self._running = True
@@ -70,8 +71,14 @@ class WeChatBot:
     def _tick(self):
         # 1. 探测微信主窗口
         if not self.driver.find_wechat_window():
-            logger.debug("未探测到可见微信主窗口，等待中...")
+            if self._last_bind_status:
+                logger.warning("[-] 微信窗口连接丢失，等待重新绑定...")
+                self._last_bind_status = False
             return
+
+        if not self._last_bind_status:
+            logger.info(f"[+] 成功绑定微信窗口 (HWND: {self.driver.main_hwnd})")
+            self._last_bind_status = True
 
         # 2. 静默读取当前聊天流消息
         messages = self.driver.read_visible_messages()
@@ -92,12 +99,11 @@ class WeChatBot:
                 self.storage.mark_processed(msg_id)
                 continue
 
-            logger.info(f"[新消息] 类型: {msg_type} | 内容: {content[:40]}")
+            logger.info(f"[收到新消息] 类型: {msg_type} | 内容: {content[:40]}")
 
             image_text = None
             # 5. 图片识别逻辑 (若包含图片或为图片类型)
             if msg_type == "image" and self.cfg.enable_ocr:
-                # 尝试通过 OCR 引擎提取文字 (如有落地图片路径可直接传入)
                 pass
 
             # 6. 大脑研判与生成回复
@@ -108,8 +114,10 @@ class WeChatBot:
 
             # 7. 静默发送回复
             if reply:
-                logger.info(f"[AI 回复] -> {reply}")
-                self.driver.send_text_silent(reply)
+                logger.info(f"[AI 回复生成] -> {reply}")
+                sent = self.driver.send_text_silent(reply)
+                if sent:
+                    logger.info("[√] 消息已静默送达微信输入框并触发发送")
 
             # 8. 标记为已处理
             self.storage.mark_processed(msg_id)

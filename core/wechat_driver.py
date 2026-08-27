@@ -39,44 +39,45 @@ class WeChatDriver:
             logger.debug(f"广播 SPI 无障碍标志提示: {e}")
 
     def find_wechat_window(self) -> bool:
-        """寻找微信 4.0 (Qt) 主窗口句柄 (防卡死快速过滤)"""
-        # 1. 优先尝试直接快速匹配常见类名
-        target_classes = ["Qt51514QWindowIcon", "WeChatMainWndForPC"]
-        for cls in target_classes:
-            hwnd = win32gui.FindWindow(cls, "微信")
-            if hwnd and win32gui.IsWindow(hwnd) and win32gui.IsWindowVisible(hwnd):
-                self.main_hwnd = hwnd
-                self.main_ctrl = auto.ControlFromHandle(self.main_hwnd)
-                return True
-
-        # 2. 若直接查找未命中，则枚举顶级窗口 (先类名过滤，避免 GetWindowText 阻塞)
-        hwnds = []
-        def enum_cb(hwnd, _):
-            try:
-                if not win32gui.IsWindow(hwnd) or not win32gui.IsWindowVisible(hwnd):
-                    return True
-                cls_name = win32gui.GetClassName(hwnd)
-                if cls_name in target_classes:
-                    title = win32gui.GetWindowText(hwnd)
-                    if title == "微信":
-                        hwnds.append(hwnd)
-            except Exception:
-                pass
-            return True
-
+        """寻找微信 4.0 (Qt) 主窗口控件 (自适应多屏/副屏坐标)"""
+        # 1. 优先使用 UIAutomation 直接按类名查找 (自适应多屏虚拟桌面)
         try:
-            win32gui.EnumWindows(enum_cb, None)
+            for cls in ["Qt51514QWindowIcon", "WeChatMainWndForPC"]:
+                win = auto.WindowControl(searchDepth=1, ClassName=cls)
+                if win.Exists(0.1):
+                    self.main_ctrl = win
+                    self.main_hwnd = win.NativeWindowHandle
+                    return True
         except Exception as e:
-            logger.debug(f"枚举窗口提示: {e}")
+            logger.debug(f"UIA 直接查找提示: {e}")
 
-        if not hwnds:
-            self.main_hwnd = None
-            self.main_ctrl = None
-            return False
+        # 2. 遍历桌面顶级控件 (模糊匹配微信标题或类名)
+        try:
+            root = auto.GetRootControl()
+            for child in root.GetChildren():
+                c_name = child.Name or ""
+                c_cls = child.ClassName or ""
+                if "微信" in c_name or c_cls in ["Qt51514QWindowIcon", "WeChatMainWndForPC"]:
+                    self.main_ctrl = child
+                    self.main_hwnd = child.NativeWindowHandle
+                    return True
+        except Exception as e:
+            logger.debug(f"UIA 遍历查找提示: {e}")
 
-        self.main_hwnd = hwnds[0]
-        self.main_ctrl = auto.ControlFromHandle(self.main_hwnd)
-        return True
+        # 3. 备用通过 FindWindow 快速查找
+        try:
+            for cls in ["Qt51514QWindowIcon", "WeChatMainWndForPC"]:
+                hwnd = win32gui.FindWindow(cls, None)
+                if hwnd and win32gui.IsWindow(hwnd):
+                    self.main_hwnd = hwnd
+                    self.main_ctrl = auto.ControlFromHandle(hwnd)
+                    return True
+        except Exception as e:
+            logger.debug(f"FindWindow 查找提示: {e}")
+
+        self.main_hwnd = None
+        self.main_ctrl = None
+        return False
 
     def get_current_chat_title(self) -> Optional[str]:
         """获取当前正在打开的群聊/私聊标题"""
