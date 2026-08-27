@@ -31,6 +31,8 @@ class BotConfig:
     poll_interval: float = float(os.getenv("POLL_INTERVAL", "1.5"))
     enable_ocr: bool = os.getenv("ENABLE_OCR", "true").lower() in ("true", "1", "yes")
     mode: str = os.getenv("MODE", "chat")  # chat: 闲聊/对话助手, dispatch: 派单研判
+    max_history_turns: int = int(os.getenv("MAX_HISTORY_TURNS", "30"))  # 默认保留最近 30 轮 (60 条消息)
+    context_ttl_minutes: float = float(os.getenv("CONTEXT_TTL_MINUTES", "60.0"))  # 默认 60 分钟内连贯接茬
     
     # 存储与日志路径
     db_path: Path = ROOT_DIR / "processed_orders.db"

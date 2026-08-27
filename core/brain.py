@@ -24,7 +24,10 @@ logger = logging.getLogger("wxbot.brain")
 class DecisionBrain:
     def __init__(self, cfg=config):
         self.cfg = cfg
-        self.context_mgr = ContextManager(max_history_turns=8, ttl_seconds=900.0)
+        self.context_mgr = ContextManager(
+            max_history_turns=self.cfg.max_history_turns,
+            ttl_seconds=self.cfg.context_ttl_minutes * 60.0
+        )
         self._consecutive_failures = 0
         self._circuit_open_until = 0.0
         self._init_prompts()
