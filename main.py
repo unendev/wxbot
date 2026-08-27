@@ -83,7 +83,7 @@ class WeChatBotEngine:
 
     def _watcher_loop(self):
         """生产者线程：初始化 COM 上下文并轻量监听微信尾部游标变动"""
-        with auto.UIAutomationInitializerInThread(maxSearchSeconds=0.5):
+        with auto.UIAutomationInitializerInThread():
             driver = WeChatDriver(self.cfg)
             last_known_fp = None
             initialized_baseline = False
@@ -133,7 +133,7 @@ class WeChatBotEngine:
 
     def _worker_loop(self):
         """消费者线程：防抖消费队列、调用大模型推理、执行静默投递"""
-        with auto.UIAutomationInitializerInThread(maxSearchSeconds=0.5):
+        with auto.UIAutomationInitializerInThread():
             driver = WeChatDriver(self.cfg)
             while self.running:
                 try:
