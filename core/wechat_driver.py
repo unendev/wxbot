@@ -24,27 +24,40 @@ SPI_SETSCREENREADER = 0x0047
 SPIF_UPDATEINIFILE = 0x01
 SPIF_SENDCHANGE = 0x02
 
-# 常见系统时间正则
-TIME_PATTERNS = [
+# 常见系统时间、进度条与系统通知正则黑名单 (全面清扫盲区)
+NOISE_PATTERNS = [
+    # 1. 系统时间
     r"^\d{1,2}:\d{2}$",
     r"^(昨天|前天|星期[一二三四五六日])\s*\d{1,2}:\d{2}$",
     r"^\d{4}年\d{1,2}月\d{1,2}日\s*\d{1,2}:\d{2}$",
     r"^\d{1,2}月\d{1,2}日\s*\d{1,2}:\d{2}$",
+    # 2. 传输进度与动态占位 (视频/文件上传)
+    r"^.*(视频|文件)\s*进度:\s*\d+%.*$",
+    r"^(正在发送|发送中|重发)\b.*$",
+    r"^(视频|文件)\s*\d{1,2}:\d{2}$",
+    # 3. 系统提示与拍一拍/撤回/红包
+    r"^.*撤回了一条消息.*$",
+    r"^.*拍了拍.*$",
+    r"^\[(微信红包|转账|位置|语音通话|视频通话|名片|群待办)\]$",
+    r"^通话时长\s*\d{1,2}:\d{2}$",
+    r"^对方已(拒绝|挂断|取消).*$",
+    r"^.*已添加好友，现在可以开始聊天了.*$",
 ]
 
 # 静态 UI 控件与占位符黑名单
 UI_NOISE_NAMES = {
     "图片", "头像", "按钮", "查看更多", "未命名", "输入", "发送", "发送(s)", "发送(S)",
-    "表情", "发送文件", "截图", "聊天记录", "语音通话", "视频通话", "聊天信息"
+    "表情", "发送文件", "截图", "聊天记录", "语音通话", "视频通话", "聊天信息", "更多",
+    "选择", "添加", "搜索", "关闭", "最小化", "最大化", "还原"
 }
 
 def is_noise_or_timestamp(text: str) -> bool:
-    """过滤微信自动插入的界面时间标签、头像占位与无意义 UI 元素"""
+    """过滤微信自动插入的界面时间标签、头像占位、动态传输进度与系统提示"""
     clean = text.strip()
     if not clean or clean.lower() in UI_NOISE_NAMES:
         return True
-    for pat in TIME_PATTERNS:
-        if re.match(pat, clean):
+    for pat in NOISE_PATTERNS:
+        if re.match(pat, clean, re.IGNORECASE):
             return True
     return False
 
@@ -177,10 +190,15 @@ class WeChatDriver:
                 if clean_text.startswith(f"{self.cfg.bot_name}:") or clean_text.startswith(f"{self.cfg.bot_name}："):
                     sender_type = "bot"
 
-                # 2. 气泡水平坐标判断 (微信左侧为他人，右侧为自己)
+                # 2. 气泡水平坐标精准判断 (基于微信右边缘贴合机制)
+                # 无论气泡/视频卡片有多宽，自己在右侧发送的内容，其右边缘必紧贴列表右边界
                 item_rect = item.BoundingRectangle
-                if list_mid_x and item_rect.right > 0:
-                    if item_rect.left > list_mid_x or (item_rect.right > list_rect.right - 120 and item_rect.left > list_rect.left + 150):
+                if list_rect and item_rect.right > 0:
+                    is_right_aligned = (
+                        item_rect.right >= list_rect.right - 95 or
+                        (list_mid_x and item_rect.left > list_mid_x)
+                    )
+                    if is_right_aligned:
                         sender_type = "bot"
 
                 msg_type = "text"
