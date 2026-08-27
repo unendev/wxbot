@@ -171,6 +171,11 @@ class WeChatBotEngine:
                         if driver.find_wechat_window():
                             sent = driver.send_text_silent(reply.content)
                             if sent:
+                                # 双保险自标已读，彻底消除自言自语回环
+                                bot_msg = ChatMessage(content=reply.content, sender_type="bot")
+                                user_msg_mirror = ChatMessage(content=reply.content, sender_type="user")
+                                self.storage.mark_processed(bot_msg.fingerprint, reply.content)
+                                self.storage.mark_processed(user_msg_mirror.fingerprint, reply.content)
                                 logger.info(f"[{trace_id}][Dispatcher] 消息已在后台成功送达并发出")
                 except Exception as e:
                     logger.error(f"[{trace_id}][Worker] 消费处理异常: {e}", exc_info=True)

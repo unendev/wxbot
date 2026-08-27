@@ -140,6 +140,9 @@ class WeChatDriver:
             tail_items = children[-limit:] if len(children) > limit else children
             results = []
 
+            list_rect = msg_list.BoundingRectangle
+            list_mid_x = (list_rect.left + list_rect.right) / 2 if list_rect.right > list_rect.left else None
+
             for item in tail_items:
                 name = item.Name
                 if not name:
@@ -149,10 +152,17 @@ class WeChatDriver:
                 if is_noise_or_timestamp(clean_text):
                     continue
 
-                # 判断发送者属性
+                # 1. 基础前缀匹配
                 sender_type = "user"
                 if clean_text.startswith(f"{self.cfg.bot_name}:") or clean_text.startswith(f"{self.cfg.bot_name}："):
                     sender_type = "bot"
+
+                # 2. 气泡水平坐标判断 (微信左侧为他人，右侧为自己)
+                item_rect = item.BoundingRectangle
+                if list_mid_x and item_rect.right > 0:
+                    # 如果气泡起始靠右半区，或者右边界紧贴右侧，判定为右侧自己发出的消息
+                    if item_rect.left > list_mid_x or (item_rect.right > list_rect.right - 120 and item_rect.left > list_rect.left + 150):
+                        sender_type = "bot"
 
                 msg_type = "text"
                 if clean_text == "[图片]":
