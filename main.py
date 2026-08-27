@@ -1,13 +1,20 @@
 # -*- coding: utf-8 -*-
 """
-微信智能机器人主入口 (Main Entrypoint)
-生命周期: 启动 -> 绑定微信 -> 跳过存量历史 -> 循环监听新消息 -> 提取/OCR -> LLM研判 -> 静默回复 -> 状态去重
+微信智能机器人主编排中枢 (Industrial Producer-Consumer Orchestrator)
+架构模式:
+1. Watcher (生产者线程): 毫秒级无阻塞监听尾部游标 (High-Water Mark)
+2. Worker (消费者线程): 消费队列消息 -> 防抖合并 -> LLM 推理 -> 静默发送
+3. Storage (持久化层): 逻辑指纹去重与断路保护
 """
 import logging
 import os
+import queue
 import sys
+import threading
 import time
+import uuid
 from pathlib import Path
+from typing import List
 
 # 设置编码与工作目录
 if hasattr(sys.stdout, "reconfigure"):
@@ -20,6 +27,7 @@ CURRENT_DIR = Path(__file__).resolve().parent
 os.chdir(CURRENT_DIR)
 
 from core.config import config
+from core.domain import ChatMessage, BotReply
 from core.storage import MessageRepository
 from core.brain import DecisionBrain
 from core.ocr_engine import OCREngine
@@ -36,104 +44,127 @@ logging.basicConfig(
 )
 logger = logging.getLogger("wxbot.main")
 
-class WeChatBot:
+class WeChatBotEngine:
     def __init__(self):
         self.cfg = config
         self.storage = MessageRepository(self.cfg.db_path)
         self.brain = DecisionBrain(self.cfg)
         self.ocr = OCREngine(enabled=self.cfg.enable_ocr)
         self.driver = WeChatDriver(self.cfg)
-        self._running = False
-        self._last_bind_status = False
-        self._initialized_history = False
+
+        self.event_queue = queue.Queue()
+        self.running = False
+        self._watcher_thread = None
+        self._worker_thread = None
 
     def start(self):
-        self._running = True
+        self.running = True
         logger.info("==========================================")
-        logger.info(f" 微信智能机器人启动 [模式: {self.cfg.mode}]")
+        logger.info(f" 微信智能机器人引擎已启动 (工业级生产-消费架构)")
         logger.info(f" 目标会话: {self.cfg.target_chat} | 机器人名: {self.cfg.bot_name}")
         logger.info(f" 模型: {self.cfg.llm_model} | OCR: {'启用' if self.cfg.enable_ocr else '关闭'}")
         logger.info("==========================================")
 
-        # 启动时清理 7 天前过期去重历史
         self.storage.cleanup_old_records()
 
-        while self._running:
+        # 启动生产者和消费者工作线程
+        self._watcher_thread = threading.Thread(target=self._watcher_loop, daemon=True)
+        self._worker_thread = threading.Thread(target=self._worker_loop, daemon=True)
+
+        self._watcher_thread.start()
+        self._worker_thread.start()
+
+        try:
+            while self.running:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            logger.info("收到退出信号，系统安全停机中...")
+            self.running = False
+
+    def _watcher_loop(self):
+        """生产者线程：轻量监听微信尾部游标变动，无阻塞产生事件"""
+        last_known_fp = None
+        initialized_baseline = False
+
+        while self.running:
             try:
-                self._tick()
-            except KeyboardInterrupt:
-                logger.info("收到退出信号，机器人正常停止。")
-                break
+                if not self.driver.find_wechat_window():
+                    time.sleep(1.0)
+                    continue
+
+                tail_messages = self.driver.get_tail_messages(limit=5)
+                if not tail_messages:
+                    time.sleep(0.5)
+                    continue
+
+                # 冷启动第一轮：将当前尾部最后一条消息作为高水位游标基线，跳过历史消息
+                if not initialized_baseline:
+                    last_msg = tail_messages[-1]
+                    last_known_fp = last_msg.fingerprint
+                    self.storage.mark_processed(last_known_fp, last_msg.content)
+                    self.storage.set_cursor(self.cfg.target_chat, last_known_fp)
+                    logger.info(f"[+] 冷启动已同步当前聊天尾部游标基线 (指纹: {last_known_fp})，开始监听新消息...")
+                    initialized_baseline = True
+                    time.sleep(0.5)
+                    continue
+
+                # 检查尾部是否有全新消息
+                for msg in tail_messages:
+                    fp = msg.fingerprint
+                    # 过滤自身发言
+                    if msg.sender_type == "bot":
+                        self.storage.mark_processed(fp, msg.content)
+                        continue
+
+                    # 检查是否已消费
+                    if not self.storage.is_processed(fp):
+                        self.storage.mark_processed(fp, msg.content)
+                        trace_id = f"trace_{uuid.uuid4().hex[:6]}"
+                        logger.info(f"[{trace_id}][Watcher] 捕获到全新未读消息: {msg.content}")
+                        self.event_queue.put((trace_id, msg))
+                        last_known_fp = fp
+
             except Exception as e:
-                logger.error(f"主循环发生未捕获异常: {e}", exc_info=True)
+                logger.error(f"[Watcher] 监听循环异常: {e}", exc_info=True)
 
-            time.sleep(self.cfg.poll_interval)
+            time.sleep(0.6)
 
-    def _tick(self):
-        # 1. 探测微信主窗口
-        if not self.driver.find_wechat_window():
-            if self._last_bind_status:
-                logger.warning("[-] 微信窗口连接丢失，等待重新绑定...")
-                self._last_bind_status = False
-                self._initialized_history = False
-            return
-
-        if not self._last_bind_status:
-            logger.info(f"[+] 成功绑定微信窗口 (HWND: {self.driver.main_hwnd})")
-            self._last_bind_status = True
-
-        # 2. 静默读取当前聊天流消息
-        messages = self.driver.read_visible_messages()
-        if not messages:
-            return
-
-        # 3. 冷启动第一轮：将屏幕上所有既有历史记录批量标记为已读，避免重复消费旧历史
-        if not self._initialized_history:
-            for msg in messages:
-                self.storage.mark_processed(msg["id"])
-            logger.info(f"[+] 冷启动已同步跳过当前屏幕上的 {len(messages)} 条存量历史消息，开始实时监听新消息...")
-            self._initialized_history = True
-            return
-
-        for msg in messages:
-            msg_id = msg["id"]
-            content = msg["content"]
-            msg_type = msg["type"]
-
-            # 4. 查重过滤
-            if self.storage.is_processed(msg_id):
+    def _worker_loop(self):
+        """消费者线程：防抖消费队列、调用大模型推理、执行静默投递"""
+        while self.running:
+            try:
+                # 阻塞获取第一条新消息
+                trace_id, first_msg = self.event_queue.get(timeout=1.0)
+            except queue.Empty:
                 continue
 
-            # 5. 防自循环（如果内容由机器人自身发出，则跳过并标记）
-            if content.startswith(f"{self.cfg.bot_name}:") or content.startswith(f"{self.cfg.bot_name}："):
-                self.storage.mark_processed(msg_id)
-                continue
+            # 防抖合并 (Debounce/Batching)：若短时间内有连续多条消息，合并打包处理
+            batch_messages = [first_msg]
+            time.sleep(0.8)  # 等待 800ms 观察是否有连发短句
+            while not self.event_queue.empty():
+                try:
+                    _, extra_msg = self.event_queue.get_nowait()
+                    batch_messages.append(extra_msg)
+                except queue.Empty:
+                    break
 
-            logger.info(f"[收到新消息] 类型: {msg_type} | 内容: {content}")
+            try:
+                # 调用决策大脑生成回复
+                reply = self.brain.generate_reply(
+                    messages=batch_messages,
+                    trace_id=trace_id
+                )
 
-            image_text = None
-            # 6. 图片识别逻辑 (若包含图片或为图片类型)
-            if msg_type == "image" and self.cfg.enable_ocr:
-                pass
-
-            # 7. 大脑研判与生成回复
-            reply = self.brain.decide_and_reply(
-                current_msg=content,
-                image_text=image_text
-            )
-
-            # 8. 静默发送回复
-            if reply:
-                logger.info(f"[AI 回复生成] -> {reply}")
-                sent = self.driver.send_text_silent(reply)
-                if sent:
-                    logger.info("[√] 消息已静默送达微信输入框并触发发送")
-
-            # 9. 标记为已处理
-            self.storage.mark_processed(msg_id)
+                # 执行静默发送
+                if reply and reply.content:
+                    sent = self.driver.send_text_silent(reply.content)
+                    if sent:
+                        logger.info(f"[{trace_id}][Dispatcher] 消息已在后台成功送达并发出")
+            except Exception as e:
+                logger.error(f"[{trace_id}][Worker] 消费处理异常: {e}", exc_info=True)
 
 def main():
-    bot = WeChatBot()
+    bot = WeChatBotEngine()
     bot.start()
 
 if __name__ == "__main__":

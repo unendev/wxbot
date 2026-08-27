@@ -1,18 +1,23 @@
 # -*- coding: utf-8 -*-
 """
-大模型决策与回复大脑 (Brain & Decision Engine)
-支持群聊闲聊、派单研判与指令解析
+大模型认知与决策大脑 (Brain & Decision Engine)
+支持 Trace ID 链路追踪、超时断路器与智能多消息合并
 """
 import logging
+import time
+import uuid
 import requests
-from typing import List, Dict, Optional, Tuple
+from typing import List, Dict, Optional
 from core.config import config
+from core.domain import ChatMessage, BotReply
 
 logger = logging.getLogger("wxbot.brain")
 
 class DecisionBrain:
     def __init__(self, cfg=config):
         self.cfg = cfg
+        self._consecutive_failures = 0
+        self._circuit_open_until = 0.0
         self._init_prompts()
 
     def _init_prompts(self):
@@ -47,59 +52,85 @@ class DecisionBrain:
 保持排版整洁，无任何多余开场白废话。
 """
 
-    def decide_and_reply(
+    def is_circuit_open(self) -> bool:
+        """检查断路器是否处于开启（熔断冷却）状态"""
+        return time.time() < self._circuit_open_until
+
+    def generate_reply(
         self,
-        current_msg: str,
+        messages: List[ChatMessage],
+        trace_id: Optional[str] = None,
         image_text: Optional[str] = None,
-        history: Optional[List[Dict[str, str]]] = None,
-    ) -> Optional[str]:
+    ) -> Optional[BotReply]:
         """
-        根据当前消息、图片识别文字和历史记录做出判断并生成回复
+        基于消息列表生成回复（支持单条或短时间多条连发合并）
         """
-        if not current_msg and not image_text:
+        if not messages:
             return None
 
-        # 拼接用户输入
-        user_content = current_msg.strip()
+        trace_id = trace_id or f"trace_{uuid.uuid4().hex[:8]}"
+
+        if self.is_circuit_open():
+            logger.warning(f"[{trace_id}][Brain] 断路器开启中，暂时跳过大模型请求以避免雪崩")
+            return None
+
+        # 合并用户输入内容
+        user_texts = [m.content for m in messages if m.sender_type == "user"]
+        if not user_texts and not image_text:
+            return None
+
+        combined_content = "\n".join(user_texts)
         if image_text:
-            user_content += f"\n[发送了一张图片，图片内识别文字如下]:\n{image_text}"
+            combined_content += f"\n[发送了一张图片，图片内识别文字如下]:\n{image_text}"
 
         system_prompt = (
             self.dispatch_prompt if self.cfg.mode == "dispatch" else self.chat_prompt
         )
 
-        messages = [{"role": "system", "content": system_prompt}]
-        if history:
-            messages.extend(history[-10:])
-        messages.append({"role": "user", "content": user_content})
+        payload = {
+            "model": self.cfg.llm_model,
+            "messages": [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": combined_content},
+            ],
+            "temperature": self.cfg.llm_temperature,
+        }
+
+        headers = {
+            "Authorization": f"Bearer {self.cfg.llm_api_key}",
+            "Content-Type": "application/json",
+        }
 
         try:
-            payload = {
-                "model": self.cfg.llm_model,
-                "messages": messages,
-                "temperature": self.cfg.llm_temperature,
-            }
-            headers = {
-                "Authorization": f"Bearer {self.cfg.llm_api_key}",
-                "Content-Type": "application/json",
-            }
-
+            start_time = time.time()
             response = requests.post(
                 self.cfg.llm_api_url,
                 headers=headers,
                 json=payload,
                 timeout=25,
             )
+            elapsed = time.time() - start_time
 
             if response.status_code == 200:
                 result = response.json()
-                reply = result["choices"][0]["message"]["content"].strip()
-                return reply
-            else:
-                logger.error(
-                    f"[Brain] LLM HTTP 异常 {response.status_code}: {response.text}"
+                reply_text = result["choices"][0]["message"]["content"].strip()
+                self._consecutive_failures = 0
+                logger.info(f"[{trace_id}][Brain] LLM 生成成功 (耗时: {elapsed:.2f}s) -> {reply_text}")
+                return BotReply(
+                    content=reply_text,
+                    trace_id=trace_id,
+                    target_chat=self.cfg.target_chat,
                 )
+            else:
+                self._handle_failure(trace_id, f"HTTP {response.status_code}: {response.text}")
                 return None
         except Exception as e:
-            logger.error(f"[Brain] 调用大模型失败: {e}")
+            self._handle_failure(trace_id, f"请求异常: {e}")
             return None
+
+    def _handle_failure(self, trace_id: str, error_msg: str):
+        self._consecutive_failures += 1
+        logger.error(f"[{trace_id}][Brain] 大模型调用失败 ({self._consecutive_failures} 次): {error_msg}")
+        if self._consecutive_failures >= 3:
+            self._circuit_open_until = time.time() + 30.0
+            logger.warning(f"[{trace_id}][Brain] 连续失败达到阈值，触发断路器熔断 30 秒")

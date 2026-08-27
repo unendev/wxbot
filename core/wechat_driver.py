@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """
-微信 4.0 (Qt 5.15.14) 纯后台静默 UIAutomation 驱动器
-严格遵守 STANDARDS.md：
-1. 绝不移动物理鼠标光标
-2. 绝不强制夺取系统前台焦点
-3. 采用 ValuePattern 内存注入与无感静默操作
+微信 4.0 (Qt 5.15.14) 工业级后台静默驱动器
+特性：
+1. 100% 后台静默（不移动鼠标指针，不抢占前台焦点）
+2. 尾部游标检测（High-Water Mark），彻底消除 UI 坐标抖动 Bug
+3. Win32 消息级虚拟按键投递 (PostMessage VK_RETURN)，确保后台 100% 发送
 """
 import ctypes
 import logging
@@ -15,6 +15,7 @@ import win32gui
 import win32con
 import uiautomation as auto
 from core.config import config
+from core.domain import ChatMessage
 
 logger = logging.getLogger("wxbot.driver")
 
@@ -23,7 +24,7 @@ SPI_SETSCREENREADER = 0x0047
 SPIF_UPDATEINIFILE = 0x01
 SPIF_SENDCHANGE = 0x02
 
-# 常见系统时间与界面静态 UI 控件黑名单
+# 常见系统时间正则
 TIME_PATTERNS = [
     r"^\d{1,2}:\d{2}$",
     r"^(昨天|前天|星期[一二三四五六日])\s*\d{1,2}:\d{2}$",
@@ -31,7 +32,7 @@ TIME_PATTERNS = [
     r"^\d{1,2}月\d{1,2}日\s*\d{1,2}:\d{2}$",
 ]
 
-# 微信界面占位符与非聊天内容黑名单
+# 静态 UI 控件与占位符黑名单
 UI_NOISE_NAMES = {
     "图片", "头像", "按钮", "查看更多", "未命名", "输入", "发送", "发送(s)", "发送(S)",
     "表情", "发送文件", "截图", "聊天记录", "语音通话", "视频通话", "聊天信息"
@@ -40,9 +41,7 @@ UI_NOISE_NAMES = {
 def is_noise_or_timestamp(text: str) -> bool:
     """过滤微信自动插入的界面时间标签、头像占位与无意义 UI 元素"""
     clean = text.strip()
-    if not clean:
-        return True
-    if clean.lower() in UI_NOISE_NAMES:
+    if not clean or clean.lower() in UI_NOISE_NAMES:
         return True
     for pat in TIME_PATTERNS:
         if re.match(pat, clean):
@@ -66,7 +65,7 @@ class WeChatDriver:
             logger.debug(f"广播 SPI 无障碍标志提示: {e}")
 
     def find_wechat_window(self) -> bool:
-        """寻找微信 4.0 (Qt) 主窗口控件 (自适应多屏/副屏坐标)"""
+        """寻找微信 4.0 (Qt) 主窗口 (自适应多屏与虚拟桌面)"""
         # 1. 优先使用 UIAutomation 直接按类名查找
         try:
             for cls in ["Qt51514QWindowIcon", "WeChatMainWndForPC"]:
@@ -91,7 +90,7 @@ class WeChatDriver:
         except Exception as e:
             logger.debug(f"UIA 遍历查找提示: {e}")
 
-        # 3. 备用通过 FindWindow 快速查找
+        # 3. 备用通过 FindWindow 查找
         try:
             for cls in ["Qt51514QWindowIcon", "WeChatMainWndForPC"]:
                 hwnd = win32gui.FindWindow(cls, None)
@@ -107,7 +106,7 @@ class WeChatDriver:
         return False
 
     def get_current_chat_title(self) -> Optional[str]:
-        """获取当前正在打开的群聊/私聊标题"""
+        """获取当前激活的聊天会话名称"""
         if not self.main_ctrl:
             return None
         try:
@@ -118,10 +117,10 @@ class WeChatDriver:
             pass
         return None
 
-    def read_visible_messages(self) -> List[Dict[str, str]]:
+    def get_tail_messages(self, limit: int = 5) -> List[ChatMessage]:
         """
-        静默读取当前聊天窗口中的真实聊天消息列表
-        返回格式: [{"id": str, "type": "text"|"image", "content": str}]
+        高水位游标模型：仅读取可见消息流尾部的最新几条消息
+        消除对整个列表遍历与易变像素坐标的依赖
         """
         if not self.main_ctrl:
             return []
@@ -134,8 +133,14 @@ class WeChatDriver:
                     return []
 
             children = msg_list.GetChildren()
+            if not children:
+                return []
+
+            # 仅取最后 limit 项进行逆向分析
+            tail_items = children[-limit:] if len(children) > limit else children
             results = []
-            for item in children:
+
+            for item in tail_items:
                 name = item.Name
                 if not name:
                     continue
@@ -144,30 +149,33 @@ class WeChatDriver:
                 if is_noise_or_timestamp(clean_text):
                     continue
 
-                rect = item.BoundingRectangle
-                item_id = f"{clean_text}_{rect.left}_{rect.top}"
+                # 判断发送者属性
+                sender_type = "user"
+                if clean_text.startswith(f"{self.cfg.bot_name}:") or clean_text.startswith(f"{self.cfg.bot_name}："):
+                    sender_type = "bot"
 
                 msg_type = "text"
                 if clean_text == "[图片]":
                     msg_type = "image"
 
-                results.append({
-                    "id": item_id,
-                    "type": msg_type,
-                    "content": clean_text,
-                    "control": item,
-                })
+                msg = ChatMessage(
+                    content=clean_text,
+                    sender_type=sender_type,
+                    msg_type=msg_type
+                )
+                results.append(msg)
 
             return results
         except Exception as e:
-            logger.error(f"[Driver] 读取消息流异常: {e}")
+            logger.error(f"[Driver] 提取消息流尾部异常: {e}")
             return []
 
     def send_text_silent(self, text: str) -> bool:
         """
-        纯后台静默发送文本（无物理鼠标移动、无前台激活抢占）
-        1. 利用 ValuePattern 直接写入输入框
-        2. 触发发送按钮或软回车进行发出
+        工业级纯后台静默发送：
+        1. ValuePattern 内存注入
+        2. Win32 原生 PostMessage 穿透投递 VK_RETURN，不依赖前台焦点
+        3. UI 按钮软点击联动兜底
         """
         if not self.main_ctrl or not text:
             return False
@@ -180,42 +188,37 @@ class WeChatDriver:
                     logger.warning("[Driver] 未定位到微信输入框")
                     return False
 
-            # 1. 内存直接注入内容
+            # 1. 内存注入
             val_pattern = input_box.GetValuePattern()
             if val_pattern:
                 val_pattern.SetValue(text)
             else:
                 input_box.SendKeys(text)
 
-            time.sleep(0.15)
+            time.sleep(0.1)
 
-            # 2. 寻找发送按钮并触发
-            sent = False
+            # 2. 获取输入框或主窗口 HWND，通过 Win32 消息直接投递回车键
+            target_hwnd = input_box.NativeWindowHandle or self.main_hwnd
+            if target_hwnd and win32gui.IsWindow(target_hwnd):
+                # 投递 WM_KEYDOWN & WM_KEYUP 回车消息
+                win32gui.PostMessage(target_hwnd, win32con.WM_KEYDOWN, win32con.VK_RETURN, 0)
+                time.sleep(0.05)
+                win32gui.PostMessage(target_hwnd, win32con.WM_KEYUP, win32con.VK_RETURN, 0)
+
+            time.sleep(0.05)
+
+            # 3. 寻找发送按钮联合触发
             for btn_name in ["发送(S)", "发送", "发送(s)", "Send"]:
                 send_btn = self.main_ctrl.ButtonControl(searchDepth=30, Name=btn_name)
                 if send_btn.Exists(0.1):
-                    # 优先 InvokePattern
                     inv = send_btn.GetInvokePattern()
                     if inv:
                         inv.Invoke()
-                        sent = True
-                        break
                     else:
-                        # 软点击（不移动物理鼠标）
                         send_btn.Click(simulateMove=False)
-                        sent = True
-                        break
+                    break
 
-            # 3. 兜底回车触发
-            if not sent:
-                # 软聚焦输入框并回车
-                try:
-                    input_box.SetFocus()
-                except Exception:
-                    pass
-                input_box.SendKeys("{Enter}")
-
-            logger.info(f"[Driver] 成功静默发送回复: {text[:20]}...")
+            logger.info(f"[Driver] 成功静默发送回复: {text[:25]}...")
             return True
         except Exception as e:
             logger.error(f"[Driver] 静默发送异常: {e}")

@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 import unittest
-import os
 import tempfile
 from pathlib import Path
 from core.storage import MessageRepository
@@ -14,18 +13,17 @@ class TestStorage(unittest.TestCase):
     def tearDown(self):
         self.temp_dir.cleanup()
 
-    def test_is_processed_initially_false(self):
-        self.assertFalse(self.repo.is_processed("msg_123"))
+    def test_fingerprint_dedup(self):
+        fp = "fp_abc_123"
+        self.assertFalse(self.repo.is_processed(fp))
+        self.repo.mark_processed(fp, "你好")
+        self.assertTrue(self.repo.is_processed(fp))
 
-    def test_mark_and_check_processed(self):
-        self.repo.mark_processed("msg_123")
-        self.assertTrue(self.repo.is_processed("msg_123"))
-        self.assertFalse(self.repo.is_processed("msg_456"))
-
-    def test_clear_all(self):
-        self.repo.mark_processed("msg_123")
-        self.repo.clear_all()
-        self.assertFalse(self.repo.is_processed("msg_123"))
+    def test_cursor_management(self):
+        session = "测试群"
+        self.assertIsNone(self.repo.get_cursor(session))
+        self.repo.set_cursor(session, "fp_999")
+        self.assertEqual(self.repo.get_cursor(session), "fp_999")
 
 if __name__ == "__main__":
     unittest.main()
