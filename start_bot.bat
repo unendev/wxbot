@@ -1,16 +1,15 @@
 @echo off
-title WeChat RPA Bot 24H Keeper
+chcp 65001 >nul
+title 微信静默智能机器人
 
 cd /d "%~dp0"
-echo ======================================================
-echo        WeChat RPA Bot 24H Keeper is running
-echo ======================================================
-echo [*] Current Directory: %cd%
 
-:loop
-echo [*] Launching bot.py...
-call .venv\Scripts\python.exe -u bot.py
+if exist ".venv\Scripts\python.exe" (
+    set "PYTHON_EXE=.venv\Scripts\python.exe"
+) else (
+    set "PYTHON_EXE=python"
+)
 
-echo [!] Warning: Bot process exited! Restarting in 5s...
-timeout /t 5 >nul
-goto loop
+echo [*] 正在启动微信机器人...
+"%PYTHON_EXE%" main.py
+pause
