@@ -23,7 +23,7 @@ SPI_SETSCREENREADER = 0x0047
 SPIF_UPDATEINIFILE = 0x01
 SPIF_SENDCHANGE = 0x02
 
-# 常见系统时间与无意义消息正则
+# 常见系统时间与界面静态 UI 控件黑名单
 TIME_PATTERNS = [
     r"^\d{1,2}:\d{2}$",
     r"^(昨天|前天|星期[一二三四五六日])\s*\d{1,2}:\d{2}$",
@@ -31,9 +31,19 @@ TIME_PATTERNS = [
     r"^\d{1,2}月\d{1,2}日\s*\d{1,2}:\d{2}$",
 ]
 
-def is_system_timestamp(text: str) -> bool:
-    """过滤微信自动插入的界面时间标签"""
+# 微信界面占位符与非聊天内容黑名单 (如头像占位、默认提示等)
+UI_NOISE_NAMES = {
+    "图片", "头像", "按钮", "查看更多", "未命名", "输入", "发送", "发送(s)",
+    "表情", "发送文件", "截图", "聊天记录", "语音通话", "视频通话"
+}
+
+def is_noise_or_timestamp(text: str) -> bool:
+    """过滤微信自动插入的界面时间标签、头像占位与无意义 UI 元素"""
     clean = text.strip()
+    if not clean:
+        return True
+    if clean.lower() in UI_NOISE_NAMES:
+        return True
     for pat in TIME_PATTERNS:
         if re.match(pat, clean):
             return True
@@ -110,7 +120,7 @@ class WeChatDriver:
 
     def read_visible_messages(self) -> List[Dict[str, str]]:
         """
-        静默读取当前聊天窗口中的可见消息列表
+        静默读取当前聊天窗口中的真实聊天消息列表
         返回格式: [{"id": str, "type": "text"|"image", "content": str}]
         """
         if not self.main_ctrl:
@@ -131,14 +141,16 @@ class WeChatDriver:
                     continue
 
                 clean_text = name.strip()
-                if not clean_text or is_system_timestamp(clean_text):
+                # 过滤头像占位、时间戳和静态控件
+                if is_noise_or_timestamp(clean_text):
                     continue
 
                 rect = item.BoundingRectangle
                 item_id = f"{clean_text}_{rect.left}_{rect.top}"
 
                 msg_type = "text"
-                if "[图片]" in clean_text or "图片" in item.ControlTypeName:
+                # 真正的微信图片消息气泡通常以 "[图片]" 显示
+                if clean_text == "[图片]":
                     msg_type = "image"
 
                 results.append({
