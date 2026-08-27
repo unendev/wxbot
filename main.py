@@ -85,14 +85,21 @@ class WeChatBotEngine:
         """生产者线程：初始化 COM 上下文并轻量监听微信尾部游标变动"""
         with auto.UIAutomationInitializerInThread():
             driver = WeChatDriver(self.cfg)
-            last_known_fp = None
+            last_bind_state = False
             initialized_baseline = False
 
             while self.running:
                 try:
                     if not driver.find_wechat_window():
+                        if last_bind_state:
+                            logger.warning("[-] 微信窗口丢失，重新等待中...")
+                            last_bind_state = False
                         time.sleep(1.0)
                         continue
+
+                    if not last_bind_state:
+                        logger.info(f"[+] 成功绑定微信窗口 (HWND: {driver.main_hwnd})")
+                        last_bind_state = True
 
                     tail_messages = driver.get_tail_messages(limit=5)
                     if not tail_messages:
