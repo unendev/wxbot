@@ -31,10 +31,10 @@ TIME_PATTERNS = [
     r"^\d{1,2}月\d{1,2}日\s*\d{1,2}:\d{2}$",
 ]
 
-# 微信界面占位符与非聊天内容黑名单 (如头像占位、默认提示等)
+# 微信界面占位符与非聊天内容黑名单
 UI_NOISE_NAMES = {
-    "图片", "头像", "按钮", "查看更多", "未命名", "输入", "发送", "发送(s)",
-    "表情", "发送文件", "截图", "聊天记录", "语音通话", "视频通话"
+    "图片", "头像", "按钮", "查看更多", "未命名", "输入", "发送", "发送(s)", "发送(S)",
+    "表情", "发送文件", "截图", "聊天记录", "语音通话", "视频通话", "聊天信息"
 }
 
 def is_noise_or_timestamp(text: str) -> bool:
@@ -141,7 +141,6 @@ class WeChatDriver:
                     continue
 
                 clean_text = name.strip()
-                # 过滤头像占位、时间戳和静态控件
                 if is_noise_or_timestamp(clean_text):
                     continue
 
@@ -149,7 +148,6 @@ class WeChatDriver:
                 item_id = f"{clean_text}_{rect.left}_{rect.top}"
 
                 msg_type = "text"
-                # 真正的微信图片消息气泡通常以 "[图片]" 显示
                 if clean_text == "[图片]":
                     msg_type = "image"
 
@@ -168,7 +166,8 @@ class WeChatDriver:
     def send_text_silent(self, text: str) -> bool:
         """
         纯后台静默发送文本（无物理鼠标移动、无前台激活抢占）
-        利用 ValuePattern 直接写入输入框
+        1. 利用 ValuePattern 直接写入输入框
+        2. 触发发送按钮或软回车进行发出
         """
         if not self.main_ctrl or not text:
             return False
@@ -181,25 +180,39 @@ class WeChatDriver:
                     logger.warning("[Driver] 未定位到微信输入框")
                     return False
 
+            # 1. 内存直接注入内容
             val_pattern = input_box.GetValuePattern()
             if val_pattern:
                 val_pattern.SetValue(text)
             else:
                 input_box.SendKeys(text)
 
-            time.sleep(0.1)
+            time.sleep(0.15)
 
-            send_btn = self.main_ctrl.ButtonControl(searchDepth=30, Name="发送(S)")
-            if not send_btn.Exists(0.2):
-                send_btn = self.main_ctrl.ButtonControl(searchDepth=30, Name="发送")
+            # 2. 寻找发送按钮并触发
+            sent = False
+            for btn_name in ["发送(S)", "发送", "发送(s)", "Send"]:
+                send_btn = self.main_ctrl.ButtonControl(searchDepth=30, Name=btn_name)
+                if send_btn.Exists(0.1):
+                    # 优先 InvokePattern
+                    inv = send_btn.GetInvokePattern()
+                    if inv:
+                        inv.Invoke()
+                        sent = True
+                        break
+                    else:
+                        # 软点击（不移动物理鼠标）
+                        send_btn.Click(simulateMove=False)
+                        sent = True
+                        break
 
-            if send_btn.Exists(0.2):
-                invoke_pattern = send_btn.GetInvokePattern()
-                if invoke_pattern:
-                    invoke_pattern.Invoke()
-                else:
-                    send_btn.Click(simulateMove=False)
-            else:
+            # 3. 兜底回车触发
+            if not sent:
+                # 软聚焦输入框并回车
+                try:
+                    input_box.SetFocus()
+                except Exception:
+                    pass
                 input_box.SendKeys("{Enter}")
 
             logger.info(f"[Driver] 成功静默发送回复: {text[:20]}...")

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """
 微信智能机器人主入口 (Main Entrypoint)
-生命周期: 启动 -> 绑定微信 -> 循环监听 -> 提取/OCR -> LLM研判 -> 静默回复 -> 状态去重
+生命周期: 启动 -> 绑定微信 -> 跳过存量历史 -> 循环监听新消息 -> 提取/OCR -> LLM研判 -> 静默回复 -> 状态去重
 """
 import logging
 import os
@@ -45,16 +45,17 @@ class WeChatBot:
         self.driver = WeChatDriver(self.cfg)
         self._running = False
         self._last_bind_status = False
+        self._initialized_history = False
 
     def start(self):
         self._running = True
         logger.info("==========================================")
         logger.info(f" 微信智能机器人启动 [模式: {self.cfg.mode}]")
         logger.info(f" 目标会话: {self.cfg.target_chat} | 机器人名: {self.cfg.bot_name}")
-        logger.info(f" OCR 状态: {'启用' if self.cfg.enable_ocr else '关闭'}")
+        logger.info(f" 模型: {self.cfg.llm_model} | OCR: {'启用' if self.cfg.enable_ocr else '关闭'}")
         logger.info("==========================================")
 
-        # 启动时进行去重历史清理
+        # 启动时清理 7 天前过期去重历史
         self.storage.cleanup_old_records()
 
         while self._running:
@@ -74,6 +75,7 @@ class WeChatBot:
             if self._last_bind_status:
                 logger.warning("[-] 微信窗口连接丢失，等待重新绑定...")
                 self._last_bind_status = False
+                self._initialized_history = False
             return
 
         if not self._last_bind_status:
@@ -85,41 +87,49 @@ class WeChatBot:
         if not messages:
             return
 
+        # 3. 冷启动第一轮：将屏幕上所有既有历史记录批量标记为已读，避免重复消费旧历史
+        if not self._initialized_history:
+            for msg in messages:
+                self.storage.mark_processed(msg["id"])
+            logger.info(f"[+] 冷启动已同步跳过当前屏幕上的 {len(messages)} 条存量历史消息，开始实时监听新消息...")
+            self._initialized_history = True
+            return
+
         for msg in messages:
             msg_id = msg["id"]
             content = msg["content"]
             msg_type = msg["type"]
 
-            # 3. 查重过滤
+            # 4. 查重过滤
             if self.storage.is_processed(msg_id):
                 continue
 
-            # 4. 防自循环（如果内容由机器人自身发出，则跳过并标记）
+            # 5. 防自循环（如果内容由机器人自身发出，则跳过并标记）
             if content.startswith(f"{self.cfg.bot_name}:") or content.startswith(f"{self.cfg.bot_name}："):
                 self.storage.mark_processed(msg_id)
                 continue
 
-            logger.info(f"[收到新消息] 类型: {msg_type} | 内容: {content[:40]}")
+            logger.info(f"[收到新消息] 类型: {msg_type} | 内容: {content}")
 
             image_text = None
-            # 5. 图片识别逻辑 (若包含图片或为图片类型)
+            # 6. 图片识别逻辑 (若包含图片或为图片类型)
             if msg_type == "image" and self.cfg.enable_ocr:
                 pass
 
-            # 6. 大脑研判与生成回复
+            # 7. 大脑研判与生成回复
             reply = self.brain.decide_and_reply(
                 current_msg=content,
                 image_text=image_text
             )
 
-            # 7. 静默发送回复
+            # 8. 静默发送回复
             if reply:
                 logger.info(f"[AI 回复生成] -> {reply}")
                 sent = self.driver.send_text_silent(reply)
                 if sent:
                     logger.info("[√] 消息已静默送达微信输入框并触发发送")
 
-            # 8. 标记为已处理
+            # 9. 标记为已处理
             self.storage.mark_processed(msg_id)
 
 def main():
