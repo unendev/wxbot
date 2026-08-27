@@ -8,3 +8,24 @@
 2026-08-27 23:50:29,127 [INFO]  目标会话: 大丑 | 机器人名: 小丑
 2026-08-27 23:50:29,127 [INFO]  OCR 状态: 启用
 2026-08-27 23:50:29,127 [INFO] ==========================================
+2026-08-28 00:04:16,995 [INFO] ==========================================
+2026-08-28 00:04:16,995 [INFO]  微信智能机器人启动 [模式: chat]
+2026-08-28 00:04:16,996 [INFO]  目标会话: 大丑 | 机器人名: 小丑
+2026-08-28 00:04:16,996 [INFO]  OCR 状态: 启用
+2026-08-28 00:04:16,996 [INFO] ==========================================
+2026-08-28 00:04:24,879 [INFO] [+] 成功绑定微信窗口 (HWND: 1445114)
+2026-08-28 00:04:38,241 [INFO] [收到新消息] 类型: text | 内容: 图片
+2026-08-28 00:04:46,047 [ERROR] [Brain] LLM HTTP 异常 403: {"error":{"code":403,"message":"Proxy browser error: Google API returned error: 403 PERMISSION_DENIED {\"error\":{\"code\":403,\"message\":\"The caller does not have permission\",\"status\":\"PERMISSION_DENIED\"}}","type":"api_error"}}
+2026-08-28 00:04:46,058 [INFO] [收到新消息] 类型: text | 内容: 13:33
+2026-08-28 00:05:01,065 [ERROR] [Brain] 调用大模型失败: HTTPConnectionPool(host='127.0.0.1', port=7860): Read timed out. (read timeout=15)
+2026-08-28 00:05:01,070 [INFO] [收到新消息] 类型: text | 内容: A做，保安室进去就能看到
+2026-08-28 00:05:16,073 [ERROR] [Brain] 调用大模型失败: HTTPConnectionPool(host='127.0.0.1', port=7860): Read timed out. (read timeout=15)
+2026-08-28 00:05:16,078 [INFO] [收到新消息] 类型: text | 内容: 23:52
+2026-08-28 00:05:31,094 [ERROR] [Brain] 调用大模型失败: HTTPConnectionPool(host='127.0.0.1', port=7860): Read timed out. (read timeout=15)
+2026-08-28 00:05:31,110 [INFO] [收到新消息] 类型: text | 内容: 测试
+2026-08-28 00:05:46,125 [ERROR] [Brain] 调用大模型失败: HTTPConnectionPool(host='127.0.0.1', port=7860): Read timed out. (read timeout=15)
+2026-08-28 00:05:46,131 [INFO] [收到新消息] 类型: text | 内容: 测试
+2026-08-28 00:06:01,143 [ERROR] [Brain] 调用大模型失败: HTTPConnectionPool(host='127.0.0.1', port=7860): Read timed out. (read timeout=15)
+2026-08-28 00:06:01,148 [INFO] [收到新消息] 类型: text | 内容: 00:04
+2026-08-28 00:06:16,153 [ERROR] [Brain] 调用大模型失败: HTTPConnectionPool(host='127.0.0.1', port=7860): Read timed out. (read timeout=15)
+2026-08-28 00:06:16,159 [INFO] [收到新消息] 类型: text | 内容: 测啊

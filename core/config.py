@@ -24,7 +24,7 @@ class BotConfig:
     # 大语言模型配置
     llm_api_url: str = os.getenv("LLM_API_URL", "http://127.0.0.1:7860/v1/chat/completions")
     llm_api_key: str = os.getenv("LLM_API_KEY", "123456")
-    llm_model: str = os.getenv("LLM_MODEL", "gemini-2.5-flash")
+    llm_model: str = os.getenv("LLM_MODEL", "gemini-3.7-flash")
     llm_temperature: float = float(os.getenv("LLM_TEMPERATURE", "0.7"))
     
     # 运行与监听策略

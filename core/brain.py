@@ -88,7 +88,7 @@ class DecisionBrain:
                 self.cfg.llm_api_url,
                 headers=headers,
                 json=payload,
-                timeout=15,
+                timeout=25,
             )
 
             if response.status_code == 200:
