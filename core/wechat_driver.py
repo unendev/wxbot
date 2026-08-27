@@ -8,6 +8,7 @@
 """
 import ctypes
 import logging
+import re
 import time
 from typing import List, Optional, Tuple, Dict
 import win32gui
@@ -21,6 +22,22 @@ logger = logging.getLogger("wxbot.driver")
 SPI_SETSCREENREADER = 0x0047
 SPIF_UPDATEINIFILE = 0x01
 SPIF_SENDCHANGE = 0x02
+
+# 常见系统时间与无意义消息正则
+TIME_PATTERNS = [
+    r"^\d{1,2}:\d{2}$",
+    r"^(昨天|前天|星期[一二三四五六日])\s*\d{1,2}:\d{2}$",
+    r"^\d{4}年\d{1,2}月\d{1,2}日\s*\d{1,2}:\d{2}$",
+    r"^\d{1,2}月\d{1,2}日\s*\d{1,2}:\d{2}$",
+]
+
+def is_system_timestamp(text: str) -> bool:
+    """过滤微信自动插入的界面时间标签"""
+    clean = text.strip()
+    for pat in TIME_PATTERNS:
+        if re.match(pat, clean):
+            return True
+    return False
 
 class WeChatDriver:
     def __init__(self, cfg=config):
@@ -40,7 +57,7 @@ class WeChatDriver:
 
     def find_wechat_window(self) -> bool:
         """寻找微信 4.0 (Qt) 主窗口控件 (自适应多屏/副屏坐标)"""
-        # 1. 优先使用 UIAutomation 直接按类名查找 (自适应多屏虚拟桌面)
+        # 1. 优先使用 UIAutomation 直接按类名查找
         try:
             for cls in ["Qt51514QWindowIcon", "WeChatMainWndForPC"]:
                 win = auto.WindowControl(searchDepth=1, ClassName=cls)
@@ -100,7 +117,6 @@ class WeChatDriver:
             return []
 
         try:
-            # 微信 4.0 消息流通常嵌套在深度 20~35 层的 ListControl(Name="消息")
             msg_list = self.main_ctrl.ListControl(searchDepth=35, Name="消息")
             if not msg_list.Exists(0.5):
                 msg_list = self.main_ctrl.ListControl(searchDepth=25)
@@ -115,6 +131,9 @@ class WeChatDriver:
                     continue
 
                 clean_text = name.strip()
+                if not clean_text or is_system_timestamp(clean_text):
+                    continue
+
                 rect = item.BoundingRectangle
                 item_id = f"{clean_text}_{rect.left}_{rect.top}"
 
