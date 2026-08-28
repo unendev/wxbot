@@ -336,6 +336,7 @@ def main():
 
                 # 收集新消息
                 incoming_texts = []
+                new_image_in_tick = False
                 now_str = time.strftime("%H:%M:%S")
 
                 for rt_id, text, is_self, item_obj, is_image in new_items:
@@ -349,6 +350,7 @@ def main():
                         img_file = session.capture_image_from_control(item_obj)
                         if img_file:
                             session.active_image_context = (img_file, time.time())
+                            new_image_in_tick = True
                             print(f"[+] [新图捕获] 成功捕获高清原图: {img_file.name}")
                         else:
                             print("[-] [新图捕获] 截屏捕获失败")
@@ -356,11 +358,12 @@ def main():
                     if text and text not in ["[图片]", "图片"]:
                         incoming_texts.append(text)
 
+                # 核心防空转守卫：只有当对方确实发了新文字，或者确实刚发了新图片时，才触发大模型！
+                if not incoming_texts and not new_image_in_tick:
+                    continue
+
                 # 2. 自然多模态装箱 (如果视窗内有图片，自动附带)
                 attached_img = session.get_or_fetch_viewport_image(visible_msgs)
-
-                if not incoming_texts and not attached_img:
-                    continue
 
                 question_text = "\n".join(incoming_texts) if incoming_texts else "请仔细分析这张图片的内容并给出详细专业的解答。"
 
