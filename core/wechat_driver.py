@@ -140,12 +140,16 @@ class WeChatDriver:
             return []
 
         try:
-            # 快速定位消息列表容器 (不缓存失效指针，实时获取)
-            msg_list = self.main_ctrl.ListControl(searchDepth=30, Name="消息")
-            if not msg_list.Exists(0.1):
-                msg_list = self.main_ctrl.ListControl(searchDepth=20)
-                if not msg_list.Exists(0.1):
-                    return []
+            # 宽泛匹配消息列表容器 (微信 4.0 Qt 会话列表或中央消息流)
+            msg_list = None
+            for depth in [15, 25, 35]:
+                candidate = self.main_ctrl.ListControl(searchDepth=depth)
+                if candidate.Exists(0.3):
+                    msg_list = candidate
+                    break
+
+            if not msg_list or not msg_list.Exists(0.1):
+                return []
 
             children = msg_list.GetChildren()
             if not children:
@@ -200,54 +204,45 @@ class WeChatDriver:
 
     def send_text_silent(self, text: str) -> bool:
         """
-        工业级纯后台静默发送：
-        1. ValuePattern 内存注入
-        2. Win32 原生 PostMessage 穿透投递 VK_RETURN，不依赖前台焦点
-        3. UI 按钮软点击联动兜底
+        确定性文本发送：支持轻量前台激活与 ValuePattern/Win32 双保险投递
         """
-        if not self.main_ctrl or not text:
+        if not self.main_ctrl or not self.main_hwnd or not text:
             return False
 
         try:
-            input_box = self.main_ctrl.EditControl(searchDepth=30, Name="输入")
-            if not input_box.Exists(0.8):
-                input_box = self.main_ctrl.EditControl(searchDepth=25)
-                if not input_box.Exists(0.5):
-                    logger.warning("[Driver] 未定位到微信输入框")
-                    return False
-
-            # 1. 内存注入
-            val_pattern = input_box.GetValuePattern()
-            if val_pattern:
-                val_pattern.SetValue(text)
-            else:
-                input_box.SendKeys(text)
-
-            time.sleep(0.1)
-
-            # 2. 获取输入框或主窗口 HWND，通过 Win32 消息直接投递回车键
-            target_hwnd = input_box.NativeWindowHandle or self.main_hwnd
-            if target_hwnd and win32gui.IsWindow(target_hwnd):
-                # 投递 WM_KEYDOWN & WM_KEYUP 回车消息
-                win32gui.PostMessage(target_hwnd, win32con.WM_KEYDOWN, win32con.VK_RETURN, 0)
+            # 1. 允许激活微信窗口前台焦点 (确保 Qt 渲染树与输入管道 100% 鲜活)
+            try:
+                win32gui.SetForegroundWindow(self.main_hwnd)
                 time.sleep(0.05)
-                win32gui.PostMessage(target_hwnd, win32con.WM_KEYUP, win32con.VK_RETURN, 0)
+            except Exception:
+                pass
 
-            time.sleep(0.05)
+            # 2. 定位输入框并填入内容
+            edit_ctrl = self.main_ctrl.EditControl(searchDepth=30)
+            if not edit_ctrl.Exists(0.5):
+                edit_ctrl = self.main_ctrl.EditControl(searchDepth=20)
 
-            # 3. 寻找发送按钮联合触发
-            for btn_name in ["发送(S)", "发送", "发送(s)", "Send"]:
-                send_btn = self.main_ctrl.ButtonControl(searchDepth=30, Name=btn_name)
-                if send_btn.Exists(0.1):
-                    inv = send_btn.GetInvokePattern()
-                    if inv:
-                        inv.Invoke()
-                    else:
-                        send_btn.Click(simulateMove=False)
+            if edit_ctrl.Exists(0.2):
+                edit_ctrl.GetValuePattern().SetValue(text)
+                time.sleep(0.05)
+
+            # 3. 双保险触发发送: 优先发送按钮，兜底 Win32 回车按键
+            send_btn = None
+            for name in ["发送(S)", "发送(s)", "发送"]:
+                btn = self.main_ctrl.ButtonControl(searchDepth=20, Name=name)
+                if btn.Exists(0.1):
+                    send_btn = btn
                     break
 
-            logger.info(f"[Driver] 成功静默发送回复: {text[:25]}...")
+            if send_btn and send_btn.Exists(0.1):
+                send_btn.GetInvokePattern().Invoke()
+            else:
+                win32gui.PostMessage(self.main_hwnd, win32con.WM_KEYDOWN, win32con.VK_RETURN, 0)
+                time.sleep(0.05)
+                win32gui.PostMessage(self.main_hwnd, win32con.WM_KEYUP, win32con.VK_RETURN, 0)
+
+            logger.info(f"[Driver] 成功发送回复: {text[:30]}...")
             return True
         except Exception as e:
-            logger.error(f"[Driver] 静默发送异常: {e}")
+            logger.error(f"[Driver] 发送消息异常: {e}", exc_info=True)
             return False
