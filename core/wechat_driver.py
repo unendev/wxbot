@@ -131,6 +131,35 @@ class WeChatDriver:
             pass
         return None
 
+    def _get_chat_message_list(self):
+        """精准定位右侧聊天消息流容器 (过滤左侧好友会话栏)"""
+        if not self.main_ctrl:
+            return None
+
+        # 1. 优先通过 Name="消息" 精准定位右侧聊天流
+        for depth in [15, 25, 35]:
+            msg_list = self.main_ctrl.ListControl(searchDepth=depth, Name="消息")
+            if msg_list.Exists(0.2):
+                return msg_list
+
+        # 2. 几何位置筛选: 获取右半区 (X > 窗口左侧 + 180) 的消息列表
+        wnd_rect = self.main_ctrl.BoundingRectangle
+        for depth in [15, 25, 35]:
+            lists = self.main_ctrl.GetChildren()
+            for child in lists:
+                if child.ControlTypeName == "ListControl":
+                    r = child.BoundingRectangle
+                    if r.left > wnd_rect.left + 150:
+                        return child
+
+            candidate = self.main_ctrl.ListControl(searchDepth=depth)
+            if candidate.Exists(0.2):
+                r = candidate.BoundingRectangle
+                if r.left > wnd_rect.left + 150:
+                    return candidate
+
+        return self.main_ctrl.ListControl(searchDepth=20)
+
     def get_tail_messages(self, limit: int = 5) -> List[ChatMessage]:
         """
         业界标准：实时获取当前渲染中的最新可见消息尾部
@@ -140,15 +169,8 @@ class WeChatDriver:
             return []
 
         try:
-            # 宽泛匹配消息列表容器 (微信 4.0 Qt 会话列表或中央消息流)
-            msg_list = None
-            for depth in [15, 25, 35]:
-                candidate = self.main_ctrl.ListControl(searchDepth=depth)
-                if candidate.Exists(0.3):
-                    msg_list = candidate
-                    break
-
-            if not msg_list or not msg_list.Exists(0.1):
+            msg_list = self._get_chat_message_list()
+            if not msg_list or not msg_list.Exists(0.2):
                 return []
 
             children = msg_list.GetChildren()
