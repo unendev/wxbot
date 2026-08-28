@@ -173,15 +173,30 @@ class ChatSessionState:
         return parsed
 
     def capture_image_from_control(self, item_obj) -> Path:
-        """【终极优雅】：利用 UIA 原生控件级无损截屏，毫秒级直接捕获高清原图！"""
+        """【精准切片】：只截取图片气泡本体，自动剔除头像与外部空白"""
         try:
             temp_file = Path(f"temp_img_{int(time.time() * 1000)}.png")
-            
-            # 直接对目标控件抓取渲染像素
-            item_obj.CaptureToImage(str(temp_file.resolve()))
-            
+
+            # 1. 优先在 ListItem 内部寻找面积最大的图片主体子控件（自动避开头像）
+            target_ctrl = item_obj
+            try:
+                sub_children = item_obj.GetChildren()
+                if sub_children:
+                    # 寻找面积最大的子控件（即图片本体气泡）
+                    def calc_area(c):
+                        r = c.BoundingRectangle
+                        return (r.right - r.left) * (r.bottom - r.top)
+                    
+                    largest_child = max(sub_children, key=calc_area, default=None)
+                    if largest_child and calc_area(largest_child) > 2500:
+                        target_ctrl = largest_child
+            except Exception:
+                pass
+
+            # 2. 对准纯净图片气泡进行无损截屏
+            target_ctrl.CaptureToImage(str(temp_file.resolve()))
+
             if temp_file.exists() and temp_file.stat().st_size > 1024:
-                # 校验图片有效性
                 with Image.open(temp_file) as img:
                     img.verify()
                 return temp_file
