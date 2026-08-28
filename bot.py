@@ -1,17 +1,17 @@
 # -*- coding: utf-8 -*-
 """
-微信 AI 智能全能助手 (自研原生 UIA + 增量快照 Delta 引擎)
-核心哲学：
-1. 状态快照 + 增量差集机制：冷启动静默，绝不重复触发历史消息
-2. 绝对抗滚屏指纹：彻底解耦坐标，无论窗口如何拉伸滚动，绝不重复触发
-3. 智能噪点清洗：自动过滤时间戳 (如 15:15, 22:44)、系统通知及小程序注脚
+微信 AI 智能全能助手 (自研原生 UIA + 末端游标 Tail-Cursor 引擎)
+核心机制：
+1. 末端增量游标 (Tail-Cursor Tracking)：基于有序队列与控件 RuntimeId 追踪，
+   彻底废除 Set 查重！哪怕对方连续发 100 句“你好”，每句都能准时捕获与回复。
+2. 绝对抗滚屏与队列对齐：利用列表末端偏移对齐，窗口无论如何滚动，历史消息永不重复触发。
+3. 智能噪点清洗：自动过滤时间戳 (如 15:15, 22:44)、系统通知及小程序注脚。
 4. 自然多模态视窗注入 (Natural Viewport Multi-modal)：
-   彻底废除死板关键词匹配！将视窗内的图文作为一个天然统一的上下文送入 Gemini，
-   由大模型自身的原生多模态注意力机制（Attention）自主理解与应答。
-5. 弹窗级安全防护 (Safe Window Teardown)：严格判定前台焦点，100% 杜绝误关微信主窗口
-6. 防回声自闭环 (Echo Suppression)：100% 杜绝“自己回复自己”的死循环
-7. 连续发送多消息合并：对方连发多条短消息时自动合并为单次提问
-8. 全透明结构化决策日志：打印完整的 UI 扫描、视觉追溯与大模型决策链
+   无任何死板关键词字典！将视窗内关联的图片与提问作为天然统一上下文送入 Gemini，
+   由大模型原生多模态注意力机制（Attention）自主结合图片作答。
+5. 弹窗级安全防护 (Safe Window Teardown)：严格判定前台焦点，100% 杜绝误关微信主窗口。
+6. 防回声自闭环 (Echo Suppression)：100% 杜绝“自己回复自己”的死循环。
+7. 连续发送多消息合并：对方连发多条短消息时自动合并为单次提问。
 """
 import os
 import re
@@ -73,7 +73,7 @@ def is_noise_text(text: str) -> bool:
     return False
 
 def find_latest_image_file(max_age_seconds: float = 10.0) -> Path:
-    """快速搜寻刚刚落地解密的高清图片（优先命中活跃存储子目录）"""
+    """快速搜寻刚刚落地解密的高清图片"""
     now = time.time()
     latest_file = None
     latest_mtime = 0
@@ -95,7 +95,6 @@ def find_latest_image_file(max_age_seconds: float = 10.0) -> Path:
                 for f in pdir.rglob(ext):
                     try:
                         st = f.stat()
-                        # 过滤小于 5KB 的图标文件
                         if st.st_size > 5120 and (now - st.st_mtime) <= max_age_seconds:
                             if st.st_mtime > latest_mtime:
                                 try:
@@ -113,7 +112,7 @@ def find_latest_image_file(max_age_seconds: float = 10.0) -> Path:
     return latest_file
 
 # =========================================================
-# 会话上下文状态管理器
+# 会话上下文状态管理器 (基于末端游标)
 # =========================================================
 class ChatSessionState:
     def __init__(self, name: str, hwnd: int, ctrl: auto.Control):
@@ -122,9 +121,9 @@ class ChatSessionState:
         self.ctrl = ctrl
         self.msg_list_ctrl = None
         self.input_ctrl = None
-        self.seen_fingerprints = set()
+        self.last_seen_msg_ids = []          # 记录上一轮屏幕可见消息的唯一 ID 队列
         self.recent_bot_replies = deque(maxlen=20)  # 防回声抑制锁
-        self.active_image_context = None            # (image_path, timestamp) 视窗活跃图片上下文
+        self.active_image_context = None            # (image_path, timestamp)
         self.initialized = False
 
     def locate_controls(self) -> bool:
@@ -162,7 +161,7 @@ class ChatSessionState:
         return self.name
 
     def parse_visible_messages(self):
-        """解析屏幕当前可见气泡，返回完整气泡对象列表"""
+        """解析屏幕当前可见气泡，返回有序消息元组列表"""
         if not self.msg_list_ctrl or not self.msg_list_ctrl.Exists(0.1):
             if not self.locate_controls():
                 return []
@@ -199,7 +198,6 @@ class ChatSessionState:
                 if raw_text in ["[图片]", "图片"]:
                     is_image = True
                 elif not raw_text:
-                    # 4.0 Qt 图片气泡几何判定
                     if width >= 40 and height >= 40:
                         text = "[图片]"
                         is_image = True
@@ -214,15 +212,20 @@ class ChatSessionState:
                 if text in self.recent_bot_replies:
                     is_self = True
 
-                fingerprint = f"{text}::{is_self}"
-                parsed.append((fingerprint, text, is_self, item, is_image))
+                # 获取控件原生唯一标识 RuntimeId (跨滚屏稳定，末端新增唯一)
+                try:
+                    rt_id = str(item.GetRuntimeId())
+                except Exception:
+                    rt_id = f"{text}_{is_self}_{id(item)}"
+
+                parsed.append((rt_id, text, is_self, item, is_image))
         except Exception:
             pass
 
         return parsed
 
     def extract_image_via_click(self, item_obj) -> Path:
-        """【安全防护版】对图片气泡执行物理闪击提取，绝对不误关主窗口"""
+        """【安全防护版】对图片气泡执行物理闪击提取"""
         try:
             before_fg_hwnd = win32gui.GetForegroundWindow()
 
@@ -253,18 +256,16 @@ class ChatSessionState:
             return None
 
     def get_or_fetch_viewport_image(self, visible_msgs) -> Path:
-        """【自然视窗多模态】获取当前视窗内的活跃图片（支持最近缓存或视口倒查）"""
+        """获取当前视窗内的活跃图片（支持最近缓存或视口倒查）"""
         now = time.time()
-        # 1. 如果 3 分钟内有已经解密成功的图片上下文，直接复用
         if self.active_image_context:
             cached_path, cached_time = self.active_image_context
             if (now - cached_time) <= 180.0 and cached_path.exists():
                 return cached_path
 
-        # 2. 如果缓存为空或已过期，从屏幕当前可见气泡倒查最近的一张对方发送的图片
         for _, _, is_self, item_obj, is_image in reversed(visible_msgs):
             if is_image and not is_self:
-                print(f"[*] [视窗视觉分析] 发现屏幕视口内存在对方图片 -> 正在自动装箱提取...")
+                print(f"[*] [视窗视觉分析] 发现屏幕视口内存在图片 -> 正在提取...")
                 img_file = self.extract_image_via_click(item_obj)
                 if img_file:
                     self.active_image_context = (img_file, now)
@@ -313,14 +314,12 @@ def scan_matching_windows():
             title = win32gui.GetWindowText(hwnd).strip()
             cls = win32gui.GetClassName(hwnd)
 
-            # 匹配独立小窗口
             for target in LISTEN_TARGETS:
                 if target in title and ("Qt" in cls or "WeChat" in cls or "微信" in title):
                     rect = win32gui.GetWindowRect(hwnd)
                     if (rect[2] - rect[0]) > 200 and (rect[3] - rect[1]) > 200:
                         found_hwnds[hwnd] = target
 
-            # 匹配主窗口
             if ("WeChat" in cls or "Qt" in cls) and (title in ["微信", "WeChat"] or not title):
                 rect = win32gui.GetWindowRect(hwnd)
                 if (rect[2] - rect[0]) > 400 and (rect[3] - rect[1]) > 400:
@@ -337,7 +336,7 @@ def scan_matching_windows():
 
 def main():
     print("=" * 60)
-    print(" 微信 AI 智能助手 (自研原生 UIA + 增量 Delta 引擎)")
+    print(" 微信 AI 智能助手 (自研原生 UIA + 末端游标 Tail-Cursor 引擎)")
     print("=" * 60)
     print(f"[*] 监听白名单目标: {', '.join(LISTEN_TARGETS)}")
     print("[*] 正在搜寻匹配的微信视窗...")
@@ -371,20 +370,36 @@ def main():
                 if not visible_msgs:
                     continue
 
+                current_ids = [m[0] for m in visible_msgs]
+
                 # 【冷启动基线建立】
                 if not session.initialized:
-                    for fp, text, is_self, _, _ in visible_msgs:
-                        session.seen_fingerprints.add(fp)
+                    session.last_seen_msg_ids = current_ids
                     session.initialized = True
-                    print(f"[+] [{session.name}] 冷启动基线建立完成 (已锁定屏幕上 {len(visible_msgs)} 条历史指纹)")
+                    print(f"[+] [{session.name}] 冷启动基线建立完成 (已锁定屏幕末端 {len(visible_msgs)} 条历史消息)")
                     continue
 
-                # 【Delta 增量差集计算】
+                # 【核心：末端增量游标计算 (Tail-Cursor Delta)】
+                # 在有序队列中寻找上一次已知消息的最后位置，之后的所有消息均为纯新增消息！
                 new_items = []
-                for fp, text, is_self, item_obj, is_image in visible_msgs:
-                    if fp not in session.seen_fingerprints:
-                        session.seen_fingerprints.add(fp)
-                        new_items.append((text, is_self, item_obj, is_image))
+                if session.last_seen_msg_ids:
+                    last_known_idx = -1
+                    # 从当前屏幕列表从后向前搜索已知 ID
+                    for idx in range(len(current_ids) - 1, -1, -1):
+                        if current_ids[idx] in session.last_seen_msg_ids:
+                            last_known_idx = idx
+                            break
+
+                    if last_known_idx != -1 and last_known_idx < len(visible_msgs) - 1:
+                        new_items = visible_msgs[last_known_idx + 1:]
+                    elif last_known_idx == -1:
+                        # 如果发生剧烈滚屏导致找不到旧 ID，以当前最新末端一条作为单点增量
+                        new_items = [visible_msgs[-1]]
+                else:
+                    new_items = visible_msgs
+
+                # 同步更新当前已知 ID 队列
+                session.last_seen_msg_ids = current_ids
 
                 if not new_items:
                     continue
@@ -393,36 +408,33 @@ def main():
                 incoming_texts = []
                 now_str = time.strftime("%H:%M:%S")
 
-                for text, is_self, item_obj, is_image in new_items:
+                for rt_id, text, is_self, item_obj, is_image in new_items:
                     if is_self or text in session.recent_bot_replies:
                         continue
 
-                    # 1. 如果新发来的是图片，立即抓取并更新当前视窗活跃图片上下文
+                    # 1. 发现新图片，立即提取并更新视窗活跃图片
                     if is_image:
                         print(f"\n[{now_str}] ----------------------------------------------------")
-                        print(f"[*] [新图捕获] 收到新图片气泡，正在提取...")
+                        print(f"[*] [新图捕获] 检测到新图片，正在提取...")
                         img_file = session.extract_image_via_click(item_obj)
                         if img_file:
                             session.active_image_context = (img_file, time.time())
                             print(f"[+] [新图捕获] 成功获取高清原图: {img_file.name}")
                         else:
-                            print("[-] [新图捕获] 提取超时或未获取到文件")
+                            print("[-] [新图捕获] 提取超时")
 
                     if text and text not in ["[图片]", "图片"]:
                         incoming_texts.append(text)
 
-                # 2. 【自然多模态视窗注入】：
-                # 无论用户发什么文字（“你好”、“如题”、“帮我看第三题”），
-                # 自动提取当前视口内关联的图片（无需任何死板关键词匹配！），由 Gemini 自身注意力机制决定是否结合图片作答。
+                # 2. 自然多模态装箱 (如果视窗内有图片，自动附带，让 Gemini 自然理解)
                 attached_img = session.get_or_fetch_viewport_image(visible_msgs)
 
                 if not incoming_texts and not attached_img:
                     continue
 
-                # 聚合文本 (如果只发了图没说话，默认给出分析)
                 question_text = "\n".join(incoming_texts) if incoming_texts else "请仔细分析这张图片的内容并给出详细专业的解答。"
 
-                # 打印全透明结构化决策日志
+                # 打印结构化决策日志
                 print(f"\n[{now_str}] ====================================================")
                 print(f"[*] [会话来源] 目标: [{session.name}]")
                 print(f"[*] [提问文本] {question_text}")
