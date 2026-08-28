@@ -2,12 +2,15 @@
 """
 微信 AI 智能全能助手 (自研原生 UIA + 渐进式双引擎超清视觉系统)
 核心架构：
-1. 渐进式双引擎视觉 (Progressive Dual-Engine Vision)：
+1. 拟人化群聊协同引擎：
+   - 私聊（如 bot）：自由免 @ 畅聊，发任何文字或图片自然秒回；
+   - 群聊（如 大丑）：群友日常聊天/发表情包时默默潜水并维持图片缓存；
+     一旦收到 @ 唤醒（如 @bot 帮我看图），立刻携带上下文与图片心领神会精准解答！
+2. 渐进式双引擎超清视觉 (Progressive Dual-Engine Vision)：
    - 主引擎：0.2秒内闪击提取 100% 原始 4K 无损大图（彻底根治长截图错别字）；
-   - 兜底引擎：若遇 I/O 延迟无缝降级为控件级截屏（CaptureToImage），100% 杜绝超时失败。
-2. 弹窗级安全销毁 (Safe Window Teardown)：严格比对前台句柄，100% 杜绝误关微信主窗口。
-3. 末端增量游标 (Tail-Cursor Tracking)：基于有序队列与 RuntimeId 追踪，重复消息准时捕获。
-4. 自然多模态视窗注入：视窗内关联图片无条件伴随装箱，由 Gemini 原生多模态注意力自主作答。
+   - 兜底引擎：自适应背景差分切片无损截屏（CaptureToImage），自动剥离头像与侧边栏。
+3. 弹窗级安全销毁 (Safe Window Teardown)：严格比对前台句柄，100% 杜绝误关微信主窗口。
+4. 末端增量游标 (Tail-Cursor Tracking)：基于有序队列与 RuntimeId 追踪，重复消息准时捕获。
 5. 防回声自闭环 (Echo Suppression)：100% 杜绝“自己回复自己”的死循环。
 6. 连续发送多消息合并：对方连发多条短消息时自动合并为单次提问。
 """
@@ -32,9 +35,10 @@ import uiautomation as auto
 from llm_service import call_llm
 
 # =========================================================
-# 配置区：需要监听的好友备注名或群聊名称
+# 配置区：监听目标与群聊识别
 # =========================================================
 LISTEN_TARGETS = ["bot", "大丑"]
+GROUP_TARGETS = ["大丑"]  # 群聊目标清单：群聊中必须 @ 机器人才会触发作答，避免日常闲聊扰民
 
 # 激活系统屏幕无障碍辅助支持
 SPI_SETSCREENREADER = 0x0046
@@ -71,7 +75,7 @@ def is_noise_text(text: str) -> bool:
     return False
 
 def find_latest_image_file(max_age_seconds: float = 8.0) -> Path:
-    """快速搜寻刚刚落地解密的高清图片（优先命中活跃存储子目录）"""
+    """快速搜寻刚刚落地解密的高清图片"""
     now = time.time()
     latest_file = None
     latest_mtime = 0
@@ -117,6 +121,7 @@ class ChatSessionState:
         self.name = name
         self.hwnd = hwnd
         self.ctrl = ctrl
+        self.is_group = name in GROUP_TARGETS
         self.msg_list_ctrl = None
         self.input_ctrl = None
         self.last_seen_msg_ids = []
@@ -153,6 +158,7 @@ class ChatSessionState:
                 txt = child.Name.strip() if child.Name else ""
                 if txt in LISTEN_TARGETS:
                     self.name = txt
+                    self.is_group = txt in GROUP_TARGETS
                     return txt
         except Exception:
             pass
@@ -293,7 +299,6 @@ class ChatSessionState:
         try:
             before_fg_hwnd = win32gui.GetForegroundWindow()
 
-            # 1. 尝试触发原图闪击
             r = item_obj.BoundingRectangle
             if (r.right - r.left) > 0 and (r.bottom - r.top) > 0:
                 center_x = r.left + (r.right - r.left) // 2
@@ -302,7 +307,6 @@ class ChatSessionState:
             else:
                 item_obj.Click(simulateMove=False)
 
-            # 2. 轮询查找 100% 原始解密大图文件 (最多等 1.5 秒)
             t0 = time.time()
             found_raw_file = None
             while time.time() - t0 < 1.5:
@@ -311,18 +315,15 @@ class ChatSessionState:
                 if found_raw_file:
                     break
 
-            # 3. 安全销毁预览弹窗
             after_fg_hwnd = win32gui.GetForegroundWindow()
             if after_fg_hwnd != self.hwnd and after_fg_hwnd != before_fg_hwnd and after_fg_hwnd != 0:
                 auto.SendKeys("{ESC}")
                 time.sleep(0.08)
 
-            # 如果成功获取 4K 原始文件，直接返回
             if found_raw_file:
                 print(f"[+] [主引擎] 成功捕获 4K 原始超清文件: {found_raw_file.name}")
                 return found_raw_file
 
-            # 4. 若原图超时，立即启动【截屏兜底引擎】无缝补位！
             print("[*] [主引擎] 原图 I/O 等待，正在启动【无损截屏引擎】补位...")
             fallback_img = self.capture_image_from_control(item_obj)
             if fallback_img:
@@ -331,7 +332,6 @@ class ChatSessionState:
 
         except Exception as e:
             print(f"[-] [双引擎提取] 异常: {e}")
-            # 异常时直接截屏兜底
             return self.capture_image_from_control(item_obj)
 
         return None
@@ -417,9 +417,10 @@ def scan_matching_windows():
 
 def main():
     print("=" * 60)
-    print(" 微信 AI 智能助手 (自研原生 UIA + 渐进式双引擎超清视觉系统)")
+    print(" 微信 AI 智能助手 (自研原生 UIA + 拟人化群聊协同系统)")
     print("=" * 60)
     print(f"[*] 监听白名单目标: {', '.join(LISTEN_TARGETS)}")
+    print(f"[*] 群聊 @ 唤醒清单: {', '.join(GROUP_TARGETS)}")
     print("[*] 正在搜寻匹配的微信视窗...")
 
     global active_sessions
@@ -441,7 +442,7 @@ def main():
                         if session.locate_controls():
                             session.resolve_real_name()
                             active_sessions[hwnd] = session
-                            print(f"[+] 成功挂载监听视窗: [{session.name}] (HWND: {hwnd})")
+                            print(f"[+] 成功挂载监听视窗: [{session.name}] ({'群聊@唤醒' if session.is_group else '私聊免@'}) (HWND: {hwnd})")
                     except Exception:
                         pass
 
@@ -484,41 +485,51 @@ def main():
                 # 收集新消息
                 incoming_texts = []
                 new_image_in_tick = False
+                has_at_mention = False
                 now_str = time.strftime("%H:%M:%S")
 
                 for rt_id, text, is_self, item_obj, is_image in new_items:
                     if is_self or text in session.recent_bot_replies:
                         continue
 
-                    # 1. 发现新图片，双引擎超清捕获
+                    # 1. 发现新图片：静默捕获并缓存至视觉热池
                     if is_image:
                         print(f"\n[{now_str}] ----------------------------------------------------")
-                        print(f"[*] [新图捕获] 收到新图片，正在启动超清双引擎捕获...")
+                        print(f"[*] [{session.name}] 发现新图片，执行超清视觉缓存...")
                         img_file = session.extract_highres_image_dual_engine(item_obj)
                         if img_file:
                             session.active_image_context = (img_file, time.time())
                             new_image_in_tick = True
+                            print(f"[+] [{session.name}] 图片已就绪并载入视觉热池: {img_file.name}")
                         else:
-                            print("[-] [新图捕获] 图像捕获失败")
+                            print(f"[-] [{session.name}] 图像捕获失败")
 
                     if text and text not in ["[图片]", "图片"]:
-                        # 自动清理群聊中的 @机器人 昵称前缀
+                        # 检测是否包含 @ 触发标识
+                        if "@" in text:
+                            has_at_mention = True
                         clean_t = re.sub(r"^@\S+[\s\u2005]*", "", text).strip()
                         incoming_texts.append(clean_t if clean_t else text)
 
-                # 核心防空转守卫
+                # =====================================================
+                # 拟人化触发守卫 (Trigger Guard)
+                # =====================================================
+                # 1. 基础防空转：无有效文字且无新图
                 if not incoming_texts and not new_image_in_tick:
                     continue
 
-                # 2. 自然多模态装箱 (如果视窗内有图片，自动附带)
+                # 2. 群聊静默守卫：若为群聊且无人 @ 机器人 -> 默默维持热缓存，绝不插嘴！
+                if session.is_group and not has_at_mention:
+                    continue
+
+                # 3. 自然多模态装箱 (如果视窗内有缓存图片，自动附带)
                 attached_img = session.get_or_fetch_viewport_image(visible_msgs)
 
-                # 纯发图未配文字时的极简自然 Prompt
                 question_text = "\n".join(incoming_texts) if incoming_texts else "请简要概括或解析这张图片的内容。"
 
                 # 打印结构化决策日志
                 print(f"\n[{now_str}] ====================================================")
-                print(f"[*] [会话来源] 目标: [{session.name}]")
+                print(f"[*] [会话来源] 目标: [{session.name}] ({'群聊@触发' if session.is_group else '私聊自由对话'})")
                 print(f"[*] [提问文本] {question_text}")
                 print(f"[*] [视觉上下文] {'已挂载: ' + attached_img.name if attached_img else '无图片'}")
                 print(f"[*] [决策行动] 正在请求 Gemini 大脑 (按 [{session.name}] 隔离记忆)...")
