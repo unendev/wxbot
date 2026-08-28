@@ -525,12 +525,13 @@ def main():
                 # 3. 自然多模态装箱 (如果视窗内有缓存图片，自动附带)
                 attached_img = session.get_or_fetch_viewport_image(visible_msgs)
 
-                question_text = "\n".join(incoming_texts) if incoming_texts else "请简要概括或解析这张图片的内容。"
+                # 提问文本：如果用户没打字（纯发图），则为纯空串，绝不强行拼接任何人工 Prompt！
+                question_text = "\n".join(incoming_texts) if incoming_texts else ""
 
                 # 打印结构化决策日志
                 print(f"\n[{now_str}] ====================================================")
                 print(f"[*] [会话来源] 目标: [{session.name}] ({'群聊@触发' if session.is_group else '私聊自由对话'})")
-                print(f"[*] [提问文本] {question_text}")
+                print(f"[*] [提问文本] {question_text if question_text else '(纯图片模式，无附加文字)'}")
                 print(f"[*] [视觉上下文] {'已挂载: ' + attached_img.name if attached_img else '无图片'}")
                 print(f"[*] [决策行动] 正在请求 Gemini 大脑 (按 [{session.name}] 隔离记忆)...")
 
