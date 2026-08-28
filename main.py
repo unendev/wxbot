@@ -104,6 +104,13 @@ class WeChatBotEngine:
                         logger.info(f"[+] 成功绑定微信窗口 (HWND: {driver.main_hwnd})")
                         last_bind_state = True
 
+                    # 动态获取当前屏幕正在打开的会话名称
+                    current_chat = driver.get_current_chat_title() or "微信会话"
+                    if self.cfg.target_chat and self.cfg.target_chat not in (current_chat, "*", ""):
+                        # 如果显式指定了目标且与当前打开的会话不匹配，则跳过
+                        time.sleep(0.5)
+                        continue
+
                     tail_messages = driver.get_tail_messages(limit=5)
                     if not tail_messages:
                         time.sleep(0.5)
@@ -114,8 +121,8 @@ class WeChatBotEngine:
                         last_msg = tail_messages[-1]
                         last_known_fp = last_msg.fingerprint
                         self.storage.mark_processed(last_known_fp, last_msg.content)
-                        self.storage.set_cursor(self.cfg.target_chat, last_known_fp)
-                        logger.info(f"[+] 冷启动已同步当前聊天尾部游标基线 (指纹: {last_known_fp})，开始监听新消息...")
+                        self.storage.set_cursor(current_chat, last_known_fp)
+                        logger.info(f"[+] 冷启动已同步当前会话【{current_chat}】尾部游标基线 (指纹: {last_known_fp})，开始监听新消息...")
                         initialized_baseline = True
                         time.sleep(0.5)
                         continue
@@ -132,8 +139,8 @@ class WeChatBotEngine:
                         if not self.storage.is_processed(fp):
                             self.storage.mark_processed(fp, msg.content)
                             trace_id = f"trace_{uuid.uuid4().hex[:6]}"
-                            logger.info(f"[{trace_id}][Watcher] 捕获到全新未读消息 (类型: {msg.msg_type}): {msg.content}")
-                            self.event_queue.put((trace_id, msg))
+                            logger.info(f"[{trace_id}][Watcher] 捕获到全新未读消息 (会话: {current_chat}, 类型: {msg.msg_type}): {msg.content}")
+                            self.event_queue.put((trace_id, current_chat, msg))
 
                 except Exception as e:
                     logger.error(f"[Watcher] 监听循环异常: {e}", exc_info=True)
@@ -147,7 +154,7 @@ class WeChatBotEngine:
             while self.running:
                 try:
                     # 阻塞获取第一条新消息
-                    trace_id, first_msg = self.event_queue.get(timeout=1.0)
+                    trace_id, session_name, first_msg = self.event_queue.get(timeout=1.0)
                 except queue.Empty:
                     continue
 
@@ -156,7 +163,7 @@ class WeChatBotEngine:
                 time.sleep(0.8)  # 等待 800ms 观察是否有连发短句
                 while not self.event_queue.empty():
                     try:
-                        _, extra_msg = self.event_queue.get_nowait()
+                        _, _, extra_msg = self.event_queue.get_nowait()
                         batch_messages.append(extra_msg)
                     except queue.Empty:
                         break
@@ -182,7 +189,7 @@ class WeChatBotEngine:
                     # 调用决策大脑生成回复 (带多轮上下文与视觉传图)
                     reply = self.brain.generate_reply(
                         messages=batch_messages,
-                        session_id=self.cfg.target_chat,
+                        session_id=session_name,
                         image_path=image_path,
                         image_ocr_text=image_ocr_text,
                         trace_id=trace_id
