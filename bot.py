@@ -221,29 +221,71 @@ class ChatSessionState:
         return parsed
 
     def capture_image_from_control(self, item_obj) -> Path:
-        """【兜底引擎】：UIA 控件级无损截屏"""
+        """【自适应背景差分切片】：自动分析投影间隙，精准裁切核心气泡，0像素残留"""
         try:
-            temp_file = Path(f"temp_img_{int(time.time() * 1000)}.png")
-            target_ctrl = item_obj
-            try:
-                sub_children = item_obj.GetChildren()
-                if sub_children:
-                    def calc_area(c):
-                        r = c.BoundingRectangle
-                        return (r.right - r.left) * (r.bottom - r.top)
-                    largest_child = max(sub_children, key=calc_area, default=None)
-                    if largest_child and calc_area(largest_child) > 2500:
-                        target_ctrl = largest_child
-            except Exception:
-                pass
+            raw_temp = Path(f"temp_raw_{int(time.time() * 1000)}.png")
+            final_temp = Path(f"temp_img_{int(time.time() * 1000)}.png")
 
-            target_ctrl.CaptureToImage(str(temp_file.resolve()))
-            if temp_file.exists() and temp_file.stat().st_size > 1024:
-                with Image.open(temp_file) as img:
-                    img.verify()
-                return temp_file
+            # 1. 抓取完整视窗行像素
+            item_obj.CaptureToImage(str(raw_temp.resolve()))
+
+            if not raw_temp.exists() or raw_temp.stat().st_size < 1024:
+                return None
+
+            # 2. 自适应背景差分与间隙分析
+            with Image.open(raw_temp).convert("RGB") as img:
+                w, h = img.size
+                bg = img.getpixel((w - 5, 5))
+
+                def color_diff(c1, c2):
+                    return abs(c1[0] - c2[0]) + abs(c1[1] - c2[1]) + abs(c1[2] - c2[2])
+
+                col_has_content = []
+                for x in range(w):
+                    has = any(color_diff(img.getpixel((x, y)), bg) > 30 for y in range(0, h, 2))
+                    col_has_content.append(has)
+
+                spans = []
+                in_span = False
+                start_x = 0
+                for x, has in enumerate(col_has_content):
+                    if has and not in_span:
+                        in_span = True
+                        start_x = x
+                    elif not has and in_span:
+                        in_span = False
+                        spans.append((start_x, x))
+                if in_span:
+                    spans.append((start_x, w))
+
+                if spans:
+                    main_span = max(spans, key=lambda s: s[1] - s[0])
+                    min_y, max_y = h, 0
+                    for x in range(main_span[0], main_span[1], 2):
+                        for y in range(h):
+                            if color_diff(img.getpixel((x, y)), bg) > 30:
+                                if y < min_y: min_y = y
+                                if y > max_y: max_y = y
+
+                    if min_y < max_y:
+                        crop_box = (main_span[0], min_y, main_span[1], max_y + 1)
+                        cropped = img.crop(crop_box)
+                        cropped.save(final_temp)
+                        try:
+                            raw_temp.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                        return final_temp
+
+                img.save(final_temp)
+                try:
+                    raw_temp.unlink(missing_ok=True)
+                except Exception:
+                    pass
+                return final_temp
+
         except Exception as e:
-            print(f"[-] [截屏兜底] 异常: {e}")
+            print(f"[-] [自适应裁切] 异常: {e}")
         return None
 
     def extract_highres_image_dual_engine(self, item_obj) -> Path:
