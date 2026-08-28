@@ -3,3 +3,4 @@ pywin32>=306
 requests>=2.31.0
 pillow>=10.0.0
 python-dotenv>=1.0.0
+wechatauto-replica>=1.1.9
