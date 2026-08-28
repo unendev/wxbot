@@ -12,3 +12,4 @@ __pycache__/
 temp_*.png
 test_*.png
 wechatauto_logs/
+@AutomationLog.txt
