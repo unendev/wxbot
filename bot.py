@@ -1,34 +1,37 @@
 # -*- coding: utf-8 -*-
 """
-微信 AI 智能全能助手 (自研原生 UIA + 渐进式双引擎超清视觉系统)
-核心架构：
-1. 拟人化群聊协同引擎：
-   - 私聊（如 bot）：自由免 @ 畅聊，发任何文字或图片自然秒回；
-   - 群聊（如 大丑）：群友日常聊天/发表情包时默默潜水并维持图片缓存；
-     一旦收到 @ 唤醒（如 @bot 帮我看图），立刻携带上下文与图片心领神会精准解答！
-2. 渐进式双引擎超清视觉 (Progressive Dual-Engine Vision)：
-   - 主引擎：0.2秒内闪击提取 100% 原始 4K 无损大图（彻底根治长截图错别字）；
-   - 兜底引擎：自适应背景差分切片无损截屏（CaptureToImage），自动剥离头像与侧边栏。
-3. 弹窗级安全销毁 (Safe Window Teardown)：严格比对前台句柄，100% 杜绝误关微信主窗口。
-4. 末端增量游标 (Tail-Cursor Tracking)：基于有序队列与 RuntimeId 追踪，重复消息准时捕获。
-5. 防回声自闭环 (Echo Suppression)：100% 杜绝“自己回复自己”的死循环。
-6. 连续发送多消息合并：对方连发多条短消息时自动合并为单次提问。
+微信 AI 智能全能助手
+架构特性：
+1. 工业级标准 Logging 输出规范 (时间戳 + LogLevel + 模块定位 + 结构化信息)
+2. 拟人化群聊协同引擎 (私聊免@自由对话，群聊静默维持热缓存+@点名唤醒)
+3. 渐进式双引擎超清视觉 (0.2s 原始 4K 文件闪击 + 自适应背景差分无损切片兜底)
+4. 弹窗级安全销毁 (Safe Window Teardown 防误关主窗口)
+5. 末端增量游标 (Tail-Cursor Tracking 防失聪与重复消息)
+6. 防回声自闭环 (Echo Suppression 杜绝死循环)
 """
 import os
 import re
 import sys
 import time
 import ctypes
+import logging
 from pathlib import Path
 from collections import deque
 from PIL import Image
 
-# 1. 控制台 UTF-8 编码
+# 1. 控制台编码与标准 Logging 初始化
 if hasattr(sys.stdout, "reconfigure"):
     try:
         sys.stdout.reconfigure(encoding="utf-8")
     except Exception:
         pass
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] [%(name)s] %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger("wxbot")
 
 import win32gui
 import uiautomation as auto
@@ -38,7 +41,7 @@ from llm_service import call_llm
 # 配置区：监听目标与群聊识别
 # =========================================================
 LISTEN_TARGETS = ["bot", "大丑"]
-GROUP_TARGETS = ["大丑"]  # 群聊目标清单：群聊中必须 @ 机器人才会触发作答，避免日常闲聊扰民
+GROUP_TARGETS = ["大丑"]  # 群聊目标清单：群聊中必须 @ 机器人才会触发作答
 
 # 激活系统屏幕无障碍辅助支持
 SPI_SETSCREENREADER = 0x0046
@@ -291,7 +294,7 @@ class ChatSessionState:
                 return final_temp
 
         except Exception as e:
-            print(f"[-] [自适应裁切] 异常: {e}")
+            logger.warning("[%s] Failed to perform adaptive image cropping: %s", self.name, e)
         return None
 
     def extract_highres_image_dual_engine(self, item_obj) -> Path:
@@ -321,17 +324,17 @@ class ChatSessionState:
                 time.sleep(0.08)
 
             if found_raw_file:
-                print(f"[+] [主引擎] 成功捕获 4K 原始超清文件: {found_raw_file.name}")
+                logger.info("[%s] Captured raw image file: '%s'", self.name, found_raw_file.name)
                 return found_raw_file
 
-            print("[*] [主引擎] 原图 I/O 等待，正在启动【无损截屏引擎】补位...")
+            logger.info("[%s] Raw file I/O timed out, falling back to UI capture", self.name)
             fallback_img = self.capture_image_from_control(item_obj)
             if fallback_img:
-                print(f"[+] [兜底引擎] 成功捕获高清气泡图: {fallback_img.name}")
+                logger.info("[%s] Captured UI fallback image: '%s'", self.name, fallback_img.name)
                 return fallback_img
 
         except Exception as e:
-            print(f"[-] [双引擎提取] 异常: {e}")
+            logger.warning("[%s] Error during dual-engine image extraction: %s", self.name, e)
             return self.capture_image_from_control(item_obj)
 
         return None
@@ -346,7 +349,7 @@ class ChatSessionState:
 
         for _, _, is_self, item_obj, is_image in reversed(visible_msgs):
             if is_image and not is_self:
-                print(f"[*] [视窗视觉分析] 发现屏幕视口内存在图片 -> 正在提取超清图...")
+                logger.info("[%s] Image detected in viewport, extracting...", self.name)
                 img_file = self.extract_highres_image_dual_engine(item_obj)
                 if img_file:
                     self.active_image_context = (img_file, now)
@@ -378,7 +381,7 @@ class ChatSessionState:
             self.recent_bot_replies.append(reply_text)
             return True
         except Exception as e:
-            print(f"[-] [{self.name}] 发送异常: {e}")
+            logger.error("[%s] Failed to send reply text: %s", self.name, e)
             return False
 
 # =========================================================
@@ -416,12 +419,8 @@ def scan_matching_windows():
     return found_hwnds
 
 def main():
-    print("=" * 60)
-    print(" 微信 AI 智能助手 (自研原生 UIA + 拟人化群聊协同系统)")
-    print("=" * 60)
-    print(f"[*] 监听白名单目标: {', '.join(LISTEN_TARGETS)}")
-    print(f"[*] 群聊 @ 唤醒清单: {', '.join(GROUP_TARGETS)}")
-    print("[*] 正在搜寻匹配的微信视窗...")
+    logger.info("Initializing WeChat Bot (Native UIA Engine)")
+    logger.info("Monitoring targets: %s (Group targets: %s)", LISTEN_TARGETS, GROUP_TARGETS)
 
     global active_sessions
 
@@ -431,7 +430,7 @@ def main():
 
             for dead_hwnd in list(active_sessions.keys()):
                 if dead_hwnd not in discovered or not win32gui.IsWindow(dead_hwnd):
-                    print(f"[-] 会话窗口 [{active_sessions[dead_hwnd].name}] 已断开")
+                    logger.warning("Session detached: [%s] (HWND: %d)", active_sessions[dead_hwnd].name, dead_hwnd)
                     del active_sessions[dead_hwnd]
 
             for hwnd, target_name in discovered.items():
@@ -442,7 +441,10 @@ def main():
                         if session.locate_controls():
                             session.resolve_real_name()
                             active_sessions[hwnd] = session
-                            print(f"[+] 成功挂载监听视窗: [{session.name}] ({'群聊@唤醒' if session.is_group else '私聊免@'}) (HWND: {hwnd})")
+                            logger.info(
+                                "Attached session: [%s] (HWND: %d, Mode: %s)",
+                                session.name, hwnd, "Group" if session.is_group else "Private"
+                            )
                     except Exception:
                         pass
 
@@ -458,7 +460,7 @@ def main():
                 if not session.initialized:
                     session.last_seen_msg_ids = current_ids
                     session.initialized = True
-                    print(f"[+] [{session.name}] 冷启动基线建立完成 (已锁定屏幕末端 {len(visible_msgs)} 条历史消息)")
+                    logger.info("[%s] Cold-start baseline established (%d messages synchronized)", session.name, len(visible_msgs))
                     continue
 
                 # 【末端增量游标计算】
@@ -486,7 +488,6 @@ def main():
                 incoming_texts = []
                 new_image_in_tick = False
                 has_at_mention = False
-                now_str = time.strftime("%H:%M:%S")
 
                 for rt_id, text, is_self, item_obj, is_image in new_items:
                     if is_self or text in session.recent_bot_replies:
@@ -494,18 +495,16 @@ def main():
 
                     # 1. 发现新图片：静默捕获并缓存至视觉热池
                     if is_image:
-                        print(f"\n[{now_str}] ----------------------------------------------------")
-                        print(f"[*] [{session.name}] 发现新图片，执行超清视觉缓存...")
+                        logger.info("[%s] New image received, caching visual context...", session.name)
                         img_file = session.extract_highres_image_dual_engine(item_obj)
                         if img_file:
                             session.active_image_context = (img_file, time.time())
                             new_image_in_tick = True
-                            print(f"[+] [{session.name}] 图片已就绪并载入视觉热池: {img_file.name}")
+                            logger.info("[%s] Visual context cached: '%s'", session.name, img_file.name)
                         else:
-                            print(f"[-] [{session.name}] 图像捕获失败")
+                            logger.warning("[%s] Failed to capture image", session.name)
 
                     if text and text not in ["[图片]", "图片"]:
-                        # 检测是否包含 @ 触发标识
                         if "@" in text:
                             has_at_mention = True
                         clean_t = re.sub(r"^@\S+[\s\u2005]*", "", text).strip()
@@ -522,31 +521,28 @@ def main():
                 if session.is_group and not has_at_mention:
                     continue
 
-                # 3. 自然多模态装箱 (如果视窗内有缓存图片，自动附带)
+                # 3. 自然多模态装箱
                 attached_img = session.get_or_fetch_viewport_image(visible_msgs)
-
-                # 提问文本：如果用户没打字（纯发图），则为纯空串，绝不强行拼接任何人工 Prompt！
                 question_text = "\n".join(incoming_texts) if incoming_texts else ""
 
-                # 打印结构化决策日志
-                print(f"\n[{now_str}] ====================================================")
-                print(f"[*] [会话来源] 目标: [{session.name}] ({'群聊@触发' if session.is_group else '私聊自由对话'})")
-                print(f"[*] [提问文本] {question_text if question_text else '(纯图片模式，无附加文字)'}")
-                print(f"[*] [视觉上下文] {'已挂载: ' + attached_img.name if attached_img else '无图片'}")
-                print(f"[*] [决策行动] 正在请求 Gemini 大脑 (按 [{session.name}] 隔离记忆)...")
+                logger.info(
+                    "[%s] Inbound query (Type: %s, Text: '%s', Image: %s)",
+                    session.name,
+                    "Group-Mention" if session.is_group else "Private",
+                    question_text if question_text else "<Pure-Image>",
+                    attached_img.name if attached_img else "None"
+                )
 
                 reply = call_llm(session.name, question_text, image_path=attached_img)
 
                 if reply:
-                    print(f"[*] [回复动作] 正在向微信输入框打字发送...")
                     session.send_text_reply(reply)
-                    print(f"[{now_str}] [√] 回复成功发出！")
+                    logger.info("[%s] Reply dispatched successfully", session.name)
                 else:
-                    print(f"[-] [回复动作] 未获取到有效回复，跳过本次发送。")
-                print(f"[{now_str}] ====================================================\n")
+                    logger.warning("[%s] Empty LLM response, skipped sending", session.name)
 
         except Exception as e:
-            pass
+            logger.error("Runtime loop exception: %s", e)
 
         time.sleep(0.6)
 
@@ -554,4 +550,4 @@ if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\n[*] 机器人已安全退出。")
+        logger.info("Bot process exited gracefully.")
