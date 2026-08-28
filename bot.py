@@ -233,7 +233,7 @@ class ChatSessionState:
             if (r.right - r.left) > 0 and (r.bottom - r.top) > 0:
                 center_x = r.left + (r.right - r.left) // 2
                 center_y = r.top + (r.bottom - r.top) // 2
-                auto.Click(center_x, center_y, simulateMove=False)
+                auto.Click(center_x, center_y)
             else:
                 item_obj.Click(simulateMove=False)
 
