@@ -69,16 +69,20 @@ class WeChatDriver:
         self._ensure_accessibility_enabled()
 
     def _ensure_accessibility_enabled(self):
-        """广播 SPI 无障碍标志，激活微信 Qt 内部隐藏的 UIA 树"""
+        """广播 SPI 无障碍标志，激活微信 Qt 内部隐藏的 UIA 树 (支持睡眠唤醒自愈)"""
         try:
-            ctypes.windll.user32.SystemParametersInfoW(
-                SPI_SETSCREENREADER, 1, 0, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE
-            )
+            now = time.time()
+            if not hasattr(self, "_last_spi_time") or (now - self._last_spi_time) > 10.0:
+                ctypes.windll.user32.SystemParametersInfoW(
+                    SPI_SETSCREENREADER, 1, 0, SPIF_UPDATEINIFILE | SPIF_SENDCHANGE
+                )
+                self._last_spi_time = now
         except Exception as e:
             logger.debug(f"广播 SPI 无障碍标志提示: {e}")
 
     def find_wechat_window(self) -> bool:
         """寻找微信 4.0 (Qt) 主窗口 (自适应多屏与虚拟桌面)"""
+        self._ensure_accessibility_enabled()
         # 1. 优先使用 UIAutomation 直接按类名查找
         try:
             for cls in ["Qt51514QWindowIcon", "WeChatMainWndForPC"]:
