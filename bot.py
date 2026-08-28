@@ -6,10 +6,10 @@
 2. 绝对抗滚屏指纹：彻底解耦坐标，无论窗口如何拉伸滚动，绝不重复触发
 3. 智能噪点清洗：自动过滤时间戳 (如 15:15, 22:44)、系统通知及小程序注脚
 4. 4.0 智能几何气泡识别：精准识别 Qt 框架下 Name 为空的图片/卡片气泡
-5. 视窗多模态主动追溯 (Viewport Visual Sniffing)：问“如题/看图”时自动向上追溯最近图片
-6. 防回声自闭环 (Echo Suppression)：100% 杜绝“自己回复自己”的死循环
-7. 连续发送多消息合并：对方连发多条短消息时自动合并为单次提问
-8. 全透明结构化决策日志：打印完整的 UI 扫描、视觉追溯与大模型决策链
+5. 视窗多模态主动追溯 (Viewport Visual Sniffing)：精准命中看图意图时向上追溯图片
+6. 弹窗级安全防护 (Safe Window Teardown)：严格判定前台焦点，100% 杜绝误关微信主窗口
+7. 防回声自闭环 (Echo Suppression)：100% 杜绝“自己回复自己”的死循环
+8. 连续发送多消息合并：对方连发多条短消息时自动合并为单次提问
 """
 import os
 import re
@@ -59,8 +59,8 @@ NOISE_KEYWORDS = [
     "查看更多", "邀请你加入群聊", "发起了群聊"
 ]
 
-# 视觉提问意图关键词
-VISUAL_INTENT_KEYWORDS = ["如题", "图", "照片", "看", "截图", "怎么", "什么", "分析", "批改", "解释"]
+# 严格的视觉提问意图关键词（绝不误伤“你好”、“在吗”等普通文字）
+VISUAL_INTENT_KEYWORDS = ["如题", "图", "照片", "看", "截图", "这张", "这个", "解析", "批改"]
 
 def is_noise_text(text: str) -> bool:
     """过滤微信中的时间戳、小程序说明卡片及系统噪音"""
@@ -74,12 +74,11 @@ def is_noise_text(text: str) -> bool:
     return False
 
 def find_latest_image_file(max_age_seconds: float = 10.0) -> Path:
-    """快速搜寻刚刚落地解密的高清图片（优先命中当月活跃子目录）"""
+    """快速搜寻刚刚落地解密的高清图片（优先命中活跃存储子目录）"""
     now = time.time()
     latest_file = None
     latest_mtime = 0
 
-    # 构造优先扫描目录 (Image 与 MsgAttach)
     priority_dirs = []
     for base in WECHAT_FILE_DIRS:
         if not base.exists():
@@ -97,7 +96,6 @@ def find_latest_image_file(max_age_seconds: float = 10.0) -> Path:
                 for f in pdir.rglob(ext):
                     try:
                         st = f.stat()
-                        # 过滤小于 5KB 的图标文件
                         if st.st_size > 5120 and (now - st.st_mtime) <= max_age_seconds:
                             if st.st_mtime > latest_mtime:
                                 try:
@@ -126,7 +124,7 @@ class ChatSessionState:
         self.input_ctrl = None
         self.seen_fingerprints = set()
         self.recent_bot_replies = deque(maxlen=20)  # 防回声抑制锁
-        self.last_captured_image = None  # 最近一次成功捕获并解析的图片路径
+        self.last_captured_image = None
         self.initialized = False
 
     def locate_controls(self) -> bool:
@@ -224,9 +222,21 @@ class ChatSessionState:
         return parsed
 
     def extract_image_via_click(self, item_obj) -> Path:
-        """对指定的图片气泡执行物理闪击提取"""
+        """【安全防护版】对图片气泡执行物理闪击提取，绝对不误关主窗口"""
         try:
-            item_obj.Click(simulateMove=False)
+            # 1. 记录操作前的前台窗口句柄
+            before_fg_hwnd = win32gui.GetForegroundWindow()
+
+            # 2. 点击气泡的绝对中心点（穿透子控件）
+            r = item_obj.BoundingRectangle
+            if (r.right - r.left) > 0 and (r.bottom - r.top) > 0:
+                center_x = r.left + (r.right - r.left) // 2
+                center_y = r.top + (r.bottom - r.top) // 2
+                auto.Click(center_x, center_y, simulateMove=False)
+            else:
+                item_obj.Click(simulateMove=False)
+
+            # 3. 轮询查找落盘解密图片
             t0 = time.time()
             found_f = None
             while time.time() - t0 < 2.0:
@@ -234,8 +244,13 @@ class ChatSessionState:
                 found_f = find_latest_image_file(max_age_seconds=6.0)
                 if found_f:
                     break
-            auto.SendKeys("{ESC}")
-            time.sleep(0.1)
+
+            # 4. 【核心安全锁】：只有当前台确实弹出了新的预览子窗口时，才发送 ESC 关闭它
+            after_fg_hwnd = win32gui.GetForegroundWindow()
+            if after_fg_hwnd != self.hwnd and after_fg_hwnd != before_fg_hwnd and after_fg_hwnd != 0:
+                auto.SendKeys("{ESC}")
+                time.sleep(0.1)
+
             return found_f
         except Exception as e:
             print(f"[-] [闪击拿图] 提取异常: {e}")
@@ -381,26 +396,23 @@ def main():
                     if text and text not in ["[图片]", "图片"]:
                         incoming_texts.append(text)
 
-                # 2. 【核心升级：视窗多模态主动追溯 (Viewport Visual Sniffing)】
-                # 当对方发来文字（如“如题”、“看图”），但当前秒没有新图时，
-                # 主动在当前屏幕所有可见气泡中，从下往上倒查最近的一张对方发送的图片！
+                # 2. 【视窗多模态精准追溯 (Viewport Visual Sniffing)】
+                # 只有当提问明确包含视觉关键词（如“如题”、“这张图”、“看截图”）时，才触发向上嗅探！
+                # 绝不在日常问候（如“你好”、“在吗”）时胡乱翻图
                 if incoming_texts and not captured_img:
                     combined_q = " ".join(incoming_texts)
-                    # 如果提问简短（<=15字）或包含视觉意图词，触发追溯
-                    should_sniff = len(combined_q) <= 15 or any(k in combined_q for k in VISUAL_INTENT_KEYWORDS)
-                    
-                    if should_sniff:
-                        # 从可见消息倒序寻找最近一张对方发来的图片
+                    has_visual_intent = any(k in combined_q for k in VISUAL_INTENT_KEYWORDS)
+
+                    if has_visual_intent:
                         for _, _, is_self, item_obj, is_image in reversed(visible_msgs):
                             if is_image and not is_self:
                                 print(f"\n[{now_str}] ----------------------------------------------------")
-                                print(f"[*] [视觉追溯] 收到提问 '{combined_q}' -> 触发视窗图片嗅探！")
-                                print(f"[*] [视觉追溯] 正在从屏幕上方倒查提取最近的图片气泡...")
+                                print(f"[*] [视觉追溯] 命中看图意图词 -> 正在从屏幕上方倒查提取最近的图片...")
                                 img_file = session.extract_image_via_click(item_obj)
                                 if img_file:
                                     captured_img = img_file
                                     session.last_captured_image = img_file
-                                    print(f"[+] [视觉追溯] 追溯成功！已获取图片附件: {img_file.name}")
+                                    print(f"[+] [视觉追溯] 追溯成功！已挂载图片: {img_file.name}")
                                 break
 
                 if not incoming_texts and not captured_img:
@@ -409,7 +421,7 @@ def main():
                 # 聚合文本
                 question_text = "\n".join(incoming_texts) if incoming_texts else "请仔细分析这张图片的内容并给出详细专业的解答。"
 
-                # 打印结构化决策日志
+                # 打印全景决策日志
                 print(f"\n[{now_str}] ====================================================")
                 print(f"[*] [会话来源] 目标: [{session.name}]")
                 print(f"[*] [提问文本] {question_text}")
