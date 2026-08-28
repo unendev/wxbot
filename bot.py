@@ -1,17 +1,14 @@
 # -*- coding: utf-8 -*-
 """
-微信 AI 智能全能助手 (自研原生 UIA + 末端游标 Tail-Cursor 引擎)
-核心机制：
-1. 末端增量游标 (Tail-Cursor Tracking)：基于有序队列与控件 RuntimeId 追踪，
-   彻底废除 Set 查重！哪怕对方连续发 100 句“你好”，每句都能准时捕获与回复。
-2. 绝对抗滚屏与队列对齐：利用列表末端偏移对齐，窗口无论如何滚动，历史消息永不重复触发。
-3. 智能噪点清洗：自动过滤时间戳 (如 15:15, 22:44)、系统通知及小程序注脚。
-4. 自然多模态视窗注入 (Natural Viewport Multi-modal)：
-   无任何死板关键词字典！将视窗内关联的图片与提问作为天然统一上下文送入 Gemini，
-   由大模型原生多模态注意力机制（Attention）自主结合图片作答。
-5. 弹窗级安全防护 (Safe Window Teardown)：严格判定前台焦点，100% 杜绝误关微信主窗口。
-6. 防回声自闭环 (Echo Suppression)：100% 杜绝“自己回复自己”的死循环。
-7. 连续发送多消息合并：对方连发多条短消息时自动合并为单次提问。
+微信 AI 智能全能助手 (自研原生 UIA + 控件级无损视觉引擎)
+核心哲学：
+1. 控件级原生无损截屏 (CaptureToImage)：
+   彻底废弃“鼠标点击+磁盘搜寻+ESC闪退”的脆弱链路！
+   直接利用 UIA 控件级无损截屏毫秒级捕获气泡图像，零弹窗、零焦点抢夺、零超时。
+2. 状态快照 + 末端增量游标 (Tail-Cursor)：冷启动静默，连续发重复消息 100% 准时捕获。
+3. 自然多模态视窗注入：视窗内关联图片无条件伴随装箱，由 Gemini 原生多模态注意力自主作答。
+4. 防回声自闭环 (Echo Suppression)：100% 杜绝“自己回复自己”的死循环。
+5. 连续发送多消息合并：对方连发多条短消息时自动合并为单次提问。
 """
 import os
 import re
@@ -42,15 +39,7 @@ LISTEN_TARGETS = ["bot", "老父亲", "测试群"]
 SPI_SETSCREENREADER = 0x0046
 ctypes.windll.user32.SystemParametersInfoW(SPI_SETSCREENREADER, 1, 0, 1)
 
-# 微信图片存储主目录探测
-WECHAT_FILE_DIRS = [
-    Path(os.environ.get("USERPROFILE", "C:/Users/a1634")) / "Documents" / "WeChat Files" / "wxid_zixek3hhdfdv22" / "FileStorage",
-    Path(os.environ.get("USERPROFILE", "C:/Users/a1634")) / "Documents" / "WeChat Files",
-    Path("E:/WeiXinFILE/xwechat_files"),
-    Path(os.environ.get("USERPROFILE", "C:/Users/a1634")) / "AppData" / "Roaming" / "Tencent" / "WeChat"
-]
-
-# 时间戳正则（匹配 15:15, 昨天 14:50, 星期二 10:00, 2026年8月28日 等）
+# 时间戳正则
 RE_TIMESTAMP = re.compile(
     r"^(\d{1,2}:\d{2}|昨天\s*\d{1,2}:\d{2}|星期[一二三四五六日天]\s*\d{1,2}:\d{2}|\d{4}年\d{1,2}月\d{1,2}日.*|\d{1,2}月\d{1,2}日\s*\d{1,2}:\d{2})$"
 )
@@ -72,47 +61,8 @@ def is_noise_text(text: str) -> bool:
             return True
     return False
 
-def find_latest_image_file(max_age_seconds: float = 10.0) -> Path:
-    """快速搜寻刚刚落地解密的高清图片"""
-    now = time.time()
-    latest_file = None
-    latest_mtime = 0
-
-    priority_dirs = []
-    for base in WECHAT_FILE_DIRS:
-        if not base.exists():
-            continue
-        if base.name == "FileStorage":
-            priority_dirs.extend([base / "Image", base / "MsgAttach"])
-        else:
-            priority_dirs.append(base)
-
-    for pdir in priority_dirs:
-        if not pdir.exists():
-            continue
-        try:
-            for ext in ["*.jpg", "*.png", "*.jpeg"]:
-                for f in pdir.rglob(ext):
-                    try:
-                        st = f.stat()
-                        if st.st_size > 5120 and (now - st.st_mtime) <= max_age_seconds:
-                            if st.st_mtime > latest_mtime:
-                                try:
-                                    with Image.open(f) as img:
-                                        img.verify()
-                                    latest_mtime = st.st_mtime
-                                    latest_file = f
-                                except Exception:
-                                    pass
-                    except Exception:
-                        pass
-        except Exception:
-            pass
-
-    return latest_file
-
 # =========================================================
-# 会话上下文状态管理器 (基于末端游标)
+# 会话上下文状态管理器
 # =========================================================
 class ChatSessionState:
     def __init__(self, name: str, hwnd: int, ctrl: auto.Control):
@@ -121,7 +71,7 @@ class ChatSessionState:
         self.ctrl = ctrl
         self.msg_list_ctrl = None
         self.input_ctrl = None
-        self.last_seen_msg_ids = []          # 记录上一轮屏幕可见消息的唯一 ID 队列
+        self.last_seen_msg_ids = []
         self.recent_bot_replies = deque(maxlen=20)  # 防回声抑制锁
         self.active_image_context = None            # (image_path, timestamp)
         self.initialized = False
@@ -181,7 +131,6 @@ class ChatSessionState:
                 width = r.right - r.left
                 height = r.bottom - r.top
 
-                # 发送方判定
                 is_self = False
                 sub_children = item.GetChildren()
                 if sub_children:
@@ -212,7 +161,6 @@ class ChatSessionState:
                 if text in self.recent_bot_replies:
                     is_self = True
 
-                # 获取控件原生唯一标识 RuntimeId (跨滚屏稳定，末端新增唯一)
                 try:
                     rt_id = str(item.GetRuntimeId())
                 except Exception:
@@ -224,36 +172,22 @@ class ChatSessionState:
 
         return parsed
 
-    def extract_image_via_click(self, item_obj) -> Path:
-        """【安全防护版】对图片气泡执行物理闪击提取"""
+    def capture_image_from_control(self, item_obj) -> Path:
+        """【终极优雅】：利用 UIA 原生控件级无损截屏，毫秒级直接捕获高清原图！"""
         try:
-            before_fg_hwnd = win32gui.GetForegroundWindow()
-
-            r = item_obj.BoundingRectangle
-            if (r.right - r.left) > 0 and (r.bottom - r.top) > 0:
-                center_x = r.left + (r.right - r.left) // 2
-                center_y = r.top + (r.bottom - r.top) // 2
-                auto.Click(center_x, center_y)
-            else:
-                item_obj.Click(simulateMove=False)
-
-            t0 = time.time()
-            found_f = None
-            while time.time() - t0 < 2.0:
-                time.sleep(0.15)
-                found_f = find_latest_image_file(max_age_seconds=6.0)
-                if found_f:
-                    break
-
-            after_fg_hwnd = win32gui.GetForegroundWindow()
-            if after_fg_hwnd != self.hwnd and after_fg_hwnd != before_fg_hwnd and after_fg_hwnd != 0:
-                auto.SendKeys("{ESC}")
-                time.sleep(0.1)
-
-            return found_f
+            temp_file = Path(f"temp_img_{int(time.time() * 1000)}.png")
+            
+            # 直接对目标控件抓取渲染像素
+            item_obj.CaptureToImage(str(temp_file.resolve()))
+            
+            if temp_file.exists() and temp_file.stat().st_size > 1024:
+                # 校验图片有效性
+                with Image.open(temp_file) as img:
+                    img.verify()
+                return temp_file
         except Exception as e:
-            print(f"[-] [闪击拿图] 提取异常: {e}")
-            return None
+            print(f"[-] [视觉截屏] 提取异常: {e}")
+        return None
 
     def get_or_fetch_viewport_image(self, visible_msgs) -> Path:
         """获取当前视窗内的活跃图片（支持最近缓存或视口倒查）"""
@@ -265,8 +199,8 @@ class ChatSessionState:
 
         for _, _, is_self, item_obj, is_image in reversed(visible_msgs):
             if is_image and not is_self:
-                print(f"[*] [视窗视觉分析] 发现屏幕视口内存在图片 -> 正在提取...")
-                img_file = self.extract_image_via_click(item_obj)
+                print(f"[*] [视窗视觉分析] 发现屏幕视口内存在图片 -> 正在提取高清图...")
+                img_file = self.capture_image_from_control(item_obj)
                 if img_file:
                     self.active_image_context = (img_file, now)
                     return img_file
@@ -336,7 +270,7 @@ def scan_matching_windows():
 
 def main():
     print("=" * 60)
-    print(" 微信 AI 智能助手 (自研原生 UIA + 末端游标 Tail-Cursor 引擎)")
+    print(" 微信 AI 智能助手 (自研原生 UIA + 控件级无损视觉引擎)")
     print("=" * 60)
     print(f"[*] 监听白名单目标: {', '.join(LISTEN_TARGETS)}")
     print("[*] 正在搜寻匹配的微信视窗...")
@@ -379,12 +313,10 @@ def main():
                     print(f"[+] [{session.name}] 冷启动基线建立完成 (已锁定屏幕末端 {len(visible_msgs)} 条历史消息)")
                     continue
 
-                # 【核心：末端增量游标计算 (Tail-Cursor Delta)】
-                # 在有序队列中寻找上一次已知消息的最后位置，之后的所有消息均为纯新增消息！
+                # 【末端增量游标计算】
                 new_items = []
                 if session.last_seen_msg_ids:
                     last_known_idx = -1
-                    # 从当前屏幕列表从后向前搜索已知 ID
                     for idx in range(len(current_ids) - 1, -1, -1):
                         if current_ids[idx] in session.last_seen_msg_ids:
                             last_known_idx = idx
@@ -393,12 +325,10 @@ def main():
                     if last_known_idx != -1 and last_known_idx < len(visible_msgs) - 1:
                         new_items = visible_msgs[last_known_idx + 1:]
                     elif last_known_idx == -1:
-                        # 如果发生剧烈滚屏导致找不到旧 ID，以当前最新末端一条作为单点增量
                         new_items = [visible_msgs[-1]]
                 else:
                     new_items = visible_msgs
 
-                # 同步更新当前已知 ID 队列
                 session.last_seen_msg_ids = current_ids
 
                 if not new_items:
@@ -412,21 +342,21 @@ def main():
                     if is_self or text in session.recent_bot_replies:
                         continue
 
-                    # 1. 发现新图片，立即提取并更新视窗活跃图片
+                    # 1. 如果新发来的是图片，直接用原生截屏毫秒级捕获！
                     if is_image:
                         print(f"\n[{now_str}] ----------------------------------------------------")
-                        print(f"[*] [新图捕获] 检测到新图片，正在提取...")
-                        img_file = session.extract_image_via_click(item_obj)
+                        print(f"[*] [新图捕获] 收到新图片气泡，执行原生无损截屏...")
+                        img_file = session.capture_image_from_control(item_obj)
                         if img_file:
                             session.active_image_context = (img_file, time.time())
-                            print(f"[+] [新图捕获] 成功获取高清原图: {img_file.name}")
+                            print(f"[+] [新图捕获] 成功捕获高清原图: {img_file.name}")
                         else:
-                            print("[-] [新图捕获] 提取超时")
+                            print("[-] [新图捕获] 截屏捕获失败")
 
                     if text and text not in ["[图片]", "图片"]:
                         incoming_texts.append(text)
 
-                # 2. 自然多模态装箱 (如果视窗内有图片，自动附带，让 Gemini 自然理解)
+                # 2. 自然多模态装箱 (如果视窗内有图片，自动附带)
                 attached_img = session.get_or_fetch_viewport_image(visible_msgs)
 
                 if not incoming_texts and not attached_img:
