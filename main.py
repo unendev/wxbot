@@ -62,9 +62,10 @@ class WeChatBotEngine:
 
     def start(self):
         self.running = True
+        target_desc = self.cfg.target_chat if self.cfg.target_chat else "自适应当前打开会话"
         logger.info("==========================================")
         logger.info(f" 微信智能机器人引擎已启动 (工业级生产-消费架构)")
-        logger.info(f" 目标会话: {self.cfg.target_chat} | 机器人名: {self.cfg.bot_name}")
+        logger.info(f" 目标会话: {target_desc} | 机器人名: {self.cfg.bot_name}")
         logger.info(f" 模型: {self.cfg.llm_model} | 视觉/OCR: {'启用' if self.cfg.enable_ocr else '关闭'}")
         logger.info("==========================================")
 

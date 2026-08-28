@@ -17,8 +17,8 @@ ROOT_DIR = Path(__file__).resolve().parent.parent
 
 @dataclass
 class BotConfig:
-    # 微信窗口与会话配置
-    target_chat: str = os.getenv("WX_TARGET_CHAT", "大丑")
+    # 微信窗口与会话配置 (留空表示自动跟随当前屏幕打开的任意会话)
+    target_chat: str = os.getenv("WX_TARGET_CHAT", "").strip()
     bot_name: str = os.getenv("WX_BOT_NAME", "小丑")
     
     # 大语言模型配置
