@@ -1,15 +1,17 @@
 # -*- coding: utf-8 -*-
 """
 微信 AI 智能全能助手 (自研原生 UIA + 增量快照 Delta 引擎)
-特性：
+核心哲学：
 1. 状态快照 + 增量差集机制：冷启动静默，绝不重复触发历史消息
 2. 绝对抗滚屏指纹：彻底解耦坐标，无论窗口如何拉伸滚动，绝不重复触发
 3. 智能噪点清洗：自动过滤时间戳 (如 15:15, 22:44)、系统通知及小程序注脚
-4. 4.0 智能几何气泡识别：精准识别 Qt 框架下 Name 为空的图片/卡片气泡
-5. 视窗多模态主动追溯 (Viewport Visual Sniffing)：精准命中看图意图时向上追溯图片
-6. 弹窗级安全防护 (Safe Window Teardown)：严格判定前台焦点，100% 杜绝误关微信主窗口
-7. 防回声自闭环 (Echo Suppression)：100% 杜绝“自己回复自己”的死循环
-8. 连续发送多消息合并：对方连发多条短消息时自动合并为单次提问
+4. 自然多模态视窗注入 (Natural Viewport Multi-modal)：
+   彻底废除死板关键词匹配！将视窗内的图文作为一个天然统一的上下文送入 Gemini，
+   由大模型自身的原生多模态注意力机制（Attention）自主理解与应答。
+5. 弹窗级安全防护 (Safe Window Teardown)：严格判定前台焦点，100% 杜绝误关微信主窗口
+6. 防回声自闭环 (Echo Suppression)：100% 杜绝“自己回复自己”的死循环
+7. 连续发送多消息合并：对方连发多条短消息时自动合并为单次提问
+8. 全透明结构化决策日志：打印完整的 UI 扫描、视觉追溯与大模型决策链
 """
 import os
 import re
@@ -59,9 +61,6 @@ NOISE_KEYWORDS = [
     "查看更多", "邀请你加入群聊", "发起了群聊"
 ]
 
-# 严格的视觉提问意图关键词（绝不误伤“你好”、“在吗”等普通文字）
-VISUAL_INTENT_KEYWORDS = ["如题", "图", "照片", "看", "截图", "这张", "这个", "解析", "批改"]
-
 def is_noise_text(text: str) -> bool:
     """过滤微信中的时间戳、小程序说明卡片及系统噪音"""
     if not text:
@@ -96,6 +95,7 @@ def find_latest_image_file(max_age_seconds: float = 10.0) -> Path:
                 for f in pdir.rglob(ext):
                     try:
                         st = f.stat()
+                        # 过滤小于 5KB 的图标文件
                         if st.st_size > 5120 and (now - st.st_mtime) <= max_age_seconds:
                             if st.st_mtime > latest_mtime:
                                 try:
@@ -124,7 +124,7 @@ class ChatSessionState:
         self.input_ctrl = None
         self.seen_fingerprints = set()
         self.recent_bot_replies = deque(maxlen=20)  # 防回声抑制锁
-        self.last_captured_image = None
+        self.active_image_context = None            # (image_path, timestamp) 视窗活跃图片上下文
         self.initialized = False
 
     def locate_controls(self) -> bool:
@@ -224,10 +224,8 @@ class ChatSessionState:
     def extract_image_via_click(self, item_obj) -> Path:
         """【安全防护版】对图片气泡执行物理闪击提取，绝对不误关主窗口"""
         try:
-            # 1. 记录操作前的前台窗口句柄
             before_fg_hwnd = win32gui.GetForegroundWindow()
 
-            # 2. 点击气泡的绝对中心点（穿透子控件）
             r = item_obj.BoundingRectangle
             if (r.right - r.left) > 0 and (r.bottom - r.top) > 0:
                 center_x = r.left + (r.right - r.left) // 2
@@ -236,7 +234,6 @@ class ChatSessionState:
             else:
                 item_obj.Click(simulateMove=False)
 
-            # 3. 轮询查找落盘解密图片
             t0 = time.time()
             found_f = None
             while time.time() - t0 < 2.0:
@@ -245,7 +242,6 @@ class ChatSessionState:
                 if found_f:
                     break
 
-            # 4. 【核心安全锁】：只有当前台确实弹出了新的预览子窗口时，才发送 ESC 关闭它
             after_fg_hwnd = win32gui.GetForegroundWindow()
             if after_fg_hwnd != self.hwnd and after_fg_hwnd != before_fg_hwnd and after_fg_hwnd != 0:
                 auto.SendKeys("{ESC}")
@@ -255,6 +251,27 @@ class ChatSessionState:
         except Exception as e:
             print(f"[-] [闪击拿图] 提取异常: {e}")
             return None
+
+    def get_or_fetch_viewport_image(self, visible_msgs) -> Path:
+        """【自然视窗多模态】获取当前视窗内的活跃图片（支持最近缓存或视口倒查）"""
+        now = time.time()
+        # 1. 如果 3 分钟内有已经解密成功的图片上下文，直接复用
+        if self.active_image_context:
+            cached_path, cached_time = self.active_image_context
+            if (now - cached_time) <= 180.0 and cached_path.exists():
+                return cached_path
+
+        # 2. 如果缓存为空或已过期，从屏幕当前可见气泡倒查最近的一张对方发送的图片
+        for _, _, is_self, item_obj, is_image in reversed(visible_msgs):
+            if is_image and not is_self:
+                print(f"[*] [视窗视觉分析] 发现屏幕视口内存在对方图片 -> 正在自动装箱提取...")
+                img_file = self.extract_image_via_click(item_obj)
+                if img_file:
+                    self.active_image_context = (img_file, now)
+                    return img_file
+                break
+
+        return None
 
     def send_text_reply(self, reply_text: str) -> bool:
         """向当前窗口输入框发送回复"""
@@ -374,21 +391,19 @@ def main():
 
                 # 收集新消息
                 incoming_texts = []
-                captured_img = None
                 now_str = time.strftime("%H:%M:%S")
 
                 for text, is_self, item_obj, is_image in new_items:
                     if is_self or text in session.recent_bot_replies:
                         continue
 
-                    # 1. 增量中直接出现新图片
+                    # 1. 如果新发来的是图片，立即抓取并更新当前视窗活跃图片上下文
                     if is_image:
                         print(f"\n[{now_str}] ----------------------------------------------------")
-                        print(f"[*] [新图捕获] 检测到对方发来图片气泡，触发闪击提取...")
+                        print(f"[*] [新图捕获] 收到新图片气泡，正在提取...")
                         img_file = session.extract_image_via_click(item_obj)
                         if img_file:
-                            captured_img = img_file
-                            session.last_captured_image = img_file
+                            session.active_image_context = (img_file, time.time())
                             print(f"[+] [新图捕获] 成功获取高清原图: {img_file.name}")
                         else:
                             print("[-] [新图捕获] 提取超时或未获取到文件")
@@ -396,39 +411,25 @@ def main():
                     if text and text not in ["[图片]", "图片"]:
                         incoming_texts.append(text)
 
-                # 2. 【视窗多模态精准追溯 (Viewport Visual Sniffing)】
-                # 只有当提问明确包含视觉关键词（如“如题”、“这张图”、“看截图”）时，才触发向上嗅探！
-                # 绝不在日常问候（如“你好”、“在吗”）时胡乱翻图
-                if incoming_texts and not captured_img:
-                    combined_q = " ".join(incoming_texts)
-                    has_visual_intent = any(k in combined_q for k in VISUAL_INTENT_KEYWORDS)
+                # 2. 【自然多模态视窗注入】：
+                # 无论用户发什么文字（“你好”、“如题”、“帮我看第三题”），
+                # 自动提取当前视口内关联的图片（无需任何死板关键词匹配！），由 Gemini 自身注意力机制决定是否结合图片作答。
+                attached_img = session.get_or_fetch_viewport_image(visible_msgs)
 
-                    if has_visual_intent:
-                        for _, _, is_self, item_obj, is_image in reversed(visible_msgs):
-                            if is_image and not is_self:
-                                print(f"\n[{now_str}] ----------------------------------------------------")
-                                print(f"[*] [视觉追溯] 命中看图意图词 -> 正在从屏幕上方倒查提取最近的图片...")
-                                img_file = session.extract_image_via_click(item_obj)
-                                if img_file:
-                                    captured_img = img_file
-                                    session.last_captured_image = img_file
-                                    print(f"[+] [视觉追溯] 追溯成功！已挂载图片: {img_file.name}")
-                                break
-
-                if not incoming_texts and not captured_img:
+                if not incoming_texts and not attached_img:
                     continue
 
-                # 聚合文本
+                # 聚合文本 (如果只发了图没说话，默认给出分析)
                 question_text = "\n".join(incoming_texts) if incoming_texts else "请仔细分析这张图片的内容并给出详细专业的解答。"
 
-                # 打印全景决策日志
+                # 打印全透明结构化决策日志
                 print(f"\n[{now_str}] ====================================================")
                 print(f"[*] [会话来源] 目标: [{session.name}]")
                 print(f"[*] [提问文本] {question_text}")
-                print(f"[*] [视觉附件] {'已挂载: ' + captured_img.name if captured_img else '无图片附件'}")
+                print(f"[*] [视觉上下文] {'已挂载: ' + attached_img.name if attached_img else '无图片'}")
                 print(f"[*] [决策行动] 正在请求 Gemini 大脑 (按 [{session.name}] 隔离记忆)...")
 
-                reply = call_llm(session.name, question_text, image_path=captured_img)
+                reply = call_llm(session.name, question_text, image_path=attached_img)
 
                 if reply:
                     print(f"[*] [回复动作] 正在向微信输入框打字发送...")
