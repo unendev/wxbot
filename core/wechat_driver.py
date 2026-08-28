@@ -163,7 +163,7 @@ class WeChatDriver:
             while curr and len(tail_items) < limit:
                 if curr.Exists(0.02) and curr.Name:
                     tail_items.insert(0, curr)
-                curr = curr.GetPriorSiblingControl()
+                curr = curr.GetPreviousSiblingControl()
 
             # 2. 如果倒序遍历未取到，降级使用 GetChildren
             if not tail_items:
