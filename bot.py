@@ -502,7 +502,9 @@ def main():
                             print("[-] [新图捕获] 图像捕获失败")
 
                     if text and text not in ["[图片]", "图片"]:
-                        incoming_texts.append(text)
+                        # 自动清理群聊中的 @机器人 昵称前缀
+                        clean_t = re.sub(r"^@\S+[\s\u2005]*", "", text).strip()
+                        incoming_texts.append(clean_t if clean_t else text)
 
                 # 核心防空转守卫
                 if not incoming_texts and not new_image_in_tick:
@@ -511,7 +513,8 @@ def main():
                 # 2. 自然多模态装箱 (如果视窗内有图片，自动附带)
                 attached_img = session.get_or_fetch_viewport_image(visible_msgs)
 
-                question_text = "\n".join(incoming_texts) if incoming_texts else "请仔细分析这张图片的内容并给出详细专业的解答。"
+                # 纯发图未配文字时的极简自然 Prompt
+                question_text = "\n".join(incoming_texts) if incoming_texts else "请简要概括或解析这张图片的内容。"
 
                 # 打印结构化决策日志
                 print(f"\n[{now_str}] ====================================================")
