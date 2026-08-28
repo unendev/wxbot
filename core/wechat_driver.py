@@ -130,49 +130,30 @@ class WeChatDriver:
             pass
         return None
 
-    def _get_msg_list_control(self):
-        """快速获取并缓存消息列表控件引用"""
-        if not self.main_ctrl:
-            return None
-        if hasattr(self, "_cached_msg_list") and self._cached_msg_list and self._cached_msg_list.Exists(0.05):
-            return self._cached_msg_list
-
-        # 首次查找
-        msg_list = self.main_ctrl.ListControl(searchDepth=30, Name="消息")
-        if not msg_list.Exists(0.2):
-            msg_list = self.main_ctrl.ListControl(searchDepth=20)
-
-        if msg_list.Exists(0.1):
-            self._cached_msg_list = msg_list
-            return msg_list
-        return None
-
     def get_tail_messages(self, limit: int = 5) -> List[ChatMessage]:
         """
-        极速尾部提取：利用 GetLastChildControl 倒序抓取末尾几项
-        耗时从几秒降至 10~30 毫秒
+        业界标准：实时获取当前渲染中的最新可见消息尾部
+        稳定兼容 Qt 虚拟化列表，保证 100% 实时感知新消息
         """
-        msg_list = self._get_msg_list_control()
-        if not msg_list:
+        if not self.main_ctrl:
             return []
 
         try:
-            # 1. 优先尝试从末尾倒序快速获取最后 limit 个子项 (极速，无需全量 GetChildren)
-            tail_items = []
-            curr = msg_list.GetLastChildControl()
-            while curr and len(tail_items) < limit:
-                if curr.Exists(0.02) and curr.Name:
-                    tail_items.insert(0, curr)
-                curr = curr.GetPreviousSiblingControl()
-
-            # 2. 如果倒序遍历未取到，降级使用 GetChildren
-            if not tail_items:
-                children = msg_list.GetChildren()
-                if not children:
+            # 快速定位消息列表容器 (不缓存失效指针，实时获取)
+            msg_list = self.main_ctrl.ListControl(searchDepth=30, Name="消息")
+            if not msg_list.Exists(0.1):
+                msg_list = self.main_ctrl.ListControl(searchDepth=20)
+                if not msg_list.Exists(0.1):
                     return []
-                tail_items = children[-limit:] if len(children) > limit else children
 
+            children = msg_list.GetChildren()
+            if not children:
+                return []
+
+            # 截取可见列表最后 limit 个渲染项
+            tail_items = children[-limit:] if len(children) > limit else children
             results = []
+
             list_rect = msg_list.BoundingRectangle
             list_mid_x = (list_rect.left + list_rect.right) / 2 if list_rect.right > list_rect.left else None
 
@@ -191,7 +172,6 @@ class WeChatDriver:
                     sender_type = "bot"
 
                 # 2. 气泡水平坐标精准判断 (基于微信右边缘贴合机制)
-                # 无论气泡/视频卡片有多宽，自己在右侧发送的内容，其右边缘必紧贴列表右边界
                 item_rect = item.BoundingRectangle
                 if list_rect and item_rect.right > 0:
                     is_right_aligned = (
@@ -214,7 +194,7 @@ class WeChatDriver:
 
             return results
         except Exception as e:
-            logger.error(f"[Driver] 极速提取消息流尾部异常: {e}")
+            logger.error(f"[Driver] 提取消息流尾部异常: {e}")
             return []
 
     def send_text_silent(self, text: str) -> bool:
