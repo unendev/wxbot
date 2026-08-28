@@ -6,10 +6,10 @@
 2. 绝对抗滚屏指纹：彻底解耦坐标，无论窗口如何拉伸滚动，绝不重复触发
 3. 智能噪点清洗：自动过滤时间戳 (如 15:15, 22:44)、系统通知及小程序注脚
 4. 4.0 智能几何气泡识别：精准识别 Qt 框架下 Name 为空的图片/卡片气泡
-5. 时间窗口多模态融合 (Temporal Fusion)：支持“先发图、后提问”跨消息伴随装箱
+5. 视窗多模态主动追溯 (Viewport Visual Sniffing)：问“如题/看图”时自动向上追溯最近图片
 6. 防回声自闭环 (Echo Suppression)：100% 杜绝“自己回复自己”的死循环
 7. 连续发送多消息合并：对方连发多条短消息时自动合并为单次提问
-8. 多会话独立隔离：支持多独立窗口及主窗口识别，30 轮上下文记忆互不干扰
+8. 全透明结构化决策日志：打印完整的 UI 扫描、视觉追溯与大模型决策链
 """
 import os
 import re
@@ -40,8 +40,9 @@ LISTEN_TARGETS = ["bot", "老父亲", "测试群"]
 SPI_SETSCREENREADER = 0x0046
 ctypes.windll.user32.SystemParametersInfoW(SPI_SETSCREENREADER, 1, 0, 1)
 
-# 微信图片可能存储的根目录探测
+# 微信图片存储主目录探测
 WECHAT_FILE_DIRS = [
+    Path(os.environ.get("USERPROFILE", "C:/Users/a1634")) / "Documents" / "WeChat Files" / "wxid_zixek3hhdfdv22" / "FileStorage",
     Path(os.environ.get("USERPROFILE", "C:/Users/a1634")) / "Documents" / "WeChat Files",
     Path("E:/WeiXinFILE/xwechat_files"),
     Path(os.environ.get("USERPROFILE", "C:/Users/a1634")) / "AppData" / "Roaming" / "Tencent" / "WeChat"
@@ -58,6 +59,9 @@ NOISE_KEYWORDS = [
     "查看更多", "邀请你加入群聊", "发起了群聊"
 ]
 
+# 视觉提问意图关键词
+VISUAL_INTENT_KEYWORDS = ["如题", "图", "照片", "看", "截图", "怎么", "什么", "分析", "批改", "解释"]
+
 def is_noise_text(text: str) -> bool:
     """过滤微信中的时间戳、小程序说明卡片及系统噪音"""
     if not text:
@@ -70,20 +74,30 @@ def is_noise_text(text: str) -> bool:
     return False
 
 def find_latest_image_file(max_age_seconds: float = 10.0) -> Path:
-    """在可能的所有微信存储路径中搜寻刚刚落地解密的高清图片"""
+    """快速搜寻刚刚落地解密的高清图片（优先命中当月活跃子目录）"""
     now = time.time()
     latest_file = None
     latest_mtime = 0
 
-    for base_dir in WECHAT_FILE_DIRS:
-        if not base_dir.exists():
+    # 构造优先扫描目录 (Image 与 MsgAttach)
+    priority_dirs = []
+    for base in WECHAT_FILE_DIRS:
+        if not base.exists():
             continue
-        for ext in ["*.jpg", "*.png", "*.jpeg"]:
-            try:
-                for f in base_dir.rglob(ext):
+        if base.name == "FileStorage":
+            priority_dirs.extend([base / "Image", base / "MsgAttach"])
+        else:
+            priority_dirs.append(base)
+
+    for pdir in priority_dirs:
+        if not pdir.exists():
+            continue
+        try:
+            for ext in ["*.jpg", "*.png", "*.jpeg"]:
+                for f in pdir.rglob(ext):
                     try:
                         st = f.stat()
-                        # 过滤小于 5KB 的图标，确保是真实大图
+                        # 过滤小于 5KB 的图标文件
                         if st.st_size > 5120 and (now - st.st_mtime) <= max_age_seconds:
                             if st.st_mtime > latest_mtime:
                                 try:
@@ -95,8 +109,8 @@ def find_latest_image_file(max_age_seconds: float = 10.0) -> Path:
                                     pass
                     except Exception:
                         pass
-            except Exception:
-                pass
+        except Exception:
+            pass
 
     return latest_file
 
@@ -112,7 +126,7 @@ class ChatSessionState:
         self.input_ctrl = None
         self.seen_fingerprints = set()
         self.recent_bot_replies = deque(maxlen=20)  # 防回声抑制锁
-        self.recent_image_cache = None  # (image_path, timestamp) 伴随装箱缓存
+        self.last_captured_image = None  # 最近一次成功捕获并解析的图片路径
         self.initialized = False
 
     def locate_controls(self) -> bool:
@@ -136,7 +150,7 @@ class ChatSessionState:
             return False
 
     def resolve_real_name(self) -> str:
-        """尝试从微信窗口顶栏动态获取当前真实的联系人/群名称"""
+        """从微信窗口顶栏动态获取真实联系人/群名称"""
         if self.name != "主窗口会话":
             return self.name
         try:
@@ -150,7 +164,7 @@ class ChatSessionState:
         return self.name
 
     def parse_visible_messages(self):
-        """解析屏幕上当前所有气泡，优雅融合文本与几何图片气泡"""
+        """解析屏幕当前可见气泡，返回完整气泡对象列表"""
         if not self.msg_list_ctrl or not self.msg_list_ctrl.Exists(0.1):
             if not self.locate_controls():
                 return []
@@ -170,7 +184,7 @@ class ChatSessionState:
                 width = r.right - r.left
                 height = r.bottom - r.top
 
-                # 判断发送方（自身右侧，对方左侧）
+                # 发送方判定
                 is_self = False
                 sub_children = item.GetChildren()
                 if sub_children:
@@ -181,21 +195,20 @@ class ChatSessionState:
                     if r.left > mid_x:
                         is_self = True
 
-                # 【4.0 优雅几何判定】：如果是图片消息
                 is_image = False
                 text = raw_text
 
                 if raw_text in ["[图片]", "图片"]:
                     is_image = True
                 elif not raw_text:
-                    # 在 Qt 4.0 中，图片/卡片气泡无文本，但具备实体宽高 (通常 > 40x40)
+                    # 4.0 Qt 图片气泡几何判定
                     if width >= 40 and height >= 40:
                         text = "[图片]"
                         is_image = True
                     else:
-                        continue  # 忽略无宽高的空占位符
+                        continue
 
-                # 噪点清洗（非图片时过滤时间戳等）
+                # 噪点清洗
                 if not is_image and is_noise_text(text):
                     continue
 
@@ -203,13 +216,30 @@ class ChatSessionState:
                 if text in self.recent_bot_replies:
                     is_self = True
 
-                # 纯净抗滚屏指纹
                 fingerprint = f"{text}::{is_self}"
                 parsed.append((fingerprint, text, is_self, item, is_image))
         except Exception:
             pass
 
         return parsed
+
+    def extract_image_via_click(self, item_obj) -> Path:
+        """对指定的图片气泡执行物理闪击提取"""
+        try:
+            item_obj.Click(simulateMove=False)
+            t0 = time.time()
+            found_f = None
+            while time.time() - t0 < 2.0:
+                time.sleep(0.15)
+                found_f = find_latest_image_file(max_age_seconds=6.0)
+                if found_f:
+                    break
+            auto.SendKeys("{ESC}")
+            time.sleep(0.1)
+            return found_f
+        except Exception as e:
+            print(f"[-] [闪击拿图] 提取异常: {e}")
+            return None
 
     def send_text_reply(self, reply_text: str) -> bool:
         """向当前窗口输入框发送回复"""
@@ -251,14 +281,14 @@ def scan_matching_windows():
             title = win32gui.GetWindowText(hwnd).strip()
             cls = win32gui.GetClassName(hwnd)
 
-            # 独立小窗口
+            # 匹配独立小窗口
             for target in LISTEN_TARGETS:
                 if target in title and ("Qt" in cls or "WeChat" in cls or "微信" in title):
                     rect = win32gui.GetWindowRect(hwnd)
                     if (rect[2] - rect[0]) > 200 and (rect[3] - rect[1]) > 200:
                         found_hwnds[hwnd] = target
 
-            # 主窗口
+            # 匹配主窗口
             if ("WeChat" in cls or "Qt" in cls) and (title in ["微信", "WeChat"] or not title):
                 rect = win32gui.GetWindowRect(hwnd)
                 if (rect[2] - rect[0]) > 400 and (rect[3] - rect[1]) > 400:
@@ -284,7 +314,6 @@ def main():
 
     while True:
         try:
-            # 1. 扫描在线视窗
             discovered = scan_matching_windows()
 
             for dead_hwnd in list(active_sessions.keys()):
@@ -304,7 +333,6 @@ def main():
                     except Exception:
                         pass
 
-            # 2. 轮询每一个激活的会话
             for hwnd, session in list(active_sessions.items()):
                 session.resolve_real_name()
                 visible_msgs = session.parse_visible_messages()
@@ -329,7 +357,7 @@ def main():
                 if not new_items:
                     continue
 
-                # 【增量多模态处理】
+                # 收集新消息
                 incoming_texts = []
                 captured_img = None
                 now_str = time.strftime("%H:%M:%S")
@@ -338,41 +366,42 @@ def main():
                     if is_self or text in session.recent_bot_replies:
                         continue
 
-                    # 发现图片气泡，触发闪击拿图
+                    # 1. 增量中直接出现新图片
                     if is_image:
-                        print(f"\n[{now_str}] [{session.name}] 发现对方发来图片，触发物理闪击提取...")
-                        try:
-                            item_obj.Click(simulateMove=False)
-                            t0 = time.time()
-                            while time.time() - t0 < 2.0:
-                                time.sleep(0.2)
-                                found_f = find_latest_image_file(max_age_seconds=5.0)
-                                if found_f:
-                                    captured_img = found_f
-                                    # 存入会话伴随装箱缓存 (60 秒内有效)
-                                    session.recent_image_cache = (captured_img, time.time())
-                                    break
-                            auto.SendKeys("{ESC}")
-                            time.sleep(0.1)
-
-                            if captured_img:
-                                print(f"[+] 成功捕获高清原图: {captured_img.name}")
-                            else:
-                                print("[-] 未能在预期时间内捕获到图片")
-                        except Exception as e:
-                            print(f"[-] 图片提取异常: {e}")
+                        print(f"\n[{now_str}] ----------------------------------------------------")
+                        print(f"[*] [新图捕获] 检测到对方发来图片气泡，触发闪击提取...")
+                        img_file = session.extract_image_via_click(item_obj)
+                        if img_file:
+                            captured_img = img_file
+                            session.last_captured_image = img_file
+                            print(f"[+] [新图捕获] 成功获取高清原图: {img_file.name}")
+                        else:
+                            print("[-] [新图捕获] 提取超时或未获取到文件")
 
                     if text and text not in ["[图片]", "图片"]:
                         incoming_texts.append(text)
 
-                # 【时间窗口多模态融合 (Temporal Fusion)】
-                # 如果本轮收到了文字（如“图中什么内容”），但当前轮没有新图片，
-                # 自动去检查 60 秒内是否有最近接收的图片伴随装箱！
-                if not captured_img and session.recent_image_cache:
-                    cached_path, cached_ts = session.recent_image_cache
-                    if time.time() - cached_ts <= 60.0:
-                        captured_img = cached_path
-                        print(f"[*] 触发时间窗口融合：已自动伴随装箱最近 60s 内的图片 ({captured_img.name})")
+                # 2. 【核心升级：视窗多模态主动追溯 (Viewport Visual Sniffing)】
+                # 当对方发来文字（如“如题”、“看图”），但当前秒没有新图时，
+                # 主动在当前屏幕所有可见气泡中，从下往上倒查最近的一张对方发送的图片！
+                if incoming_texts and not captured_img:
+                    combined_q = " ".join(incoming_texts)
+                    # 如果提问简短（<=15字）或包含视觉意图词，触发追溯
+                    should_sniff = len(combined_q) <= 15 or any(k in combined_q for k in VISUAL_INTENT_KEYWORDS)
+                    
+                    if should_sniff:
+                        # 从可见消息倒序寻找最近一张对方发来的图片
+                        for _, _, is_self, item_obj, is_image in reversed(visible_msgs):
+                            if is_image and not is_self:
+                                print(f"\n[{now_str}] ----------------------------------------------------")
+                                print(f"[*] [视觉追溯] 收到提问 '{combined_q}' -> 触发视窗图片嗅探！")
+                                print(f"[*] [视觉追溯] 正在从屏幕上方倒查提取最近的图片气泡...")
+                                img_file = session.extract_image_via_click(item_obj)
+                                if img_file:
+                                    captured_img = img_file
+                                    session.last_captured_image = img_file
+                                    print(f"[+] [视觉追溯] 追溯成功！已获取图片附件: {img_file.name}")
+                                break
 
                 if not incoming_texts and not captured_img:
                     continue
@@ -380,20 +409,22 @@ def main():
                 # 聚合文本
                 question_text = "\n".join(incoming_texts) if incoming_texts else "请仔细分析这张图片的内容并给出详细专业的解答。"
 
-                print(f"\n[{now_str}] 收到 [{session.name}] 提问: {question_text}")
-                if captured_img:
-                    print(f"[*] 附带多模态视觉图片: {captured_img.name}")
+                # 打印结构化决策日志
+                print(f"\n[{now_str}] ====================================================")
+                print(f"[*] [会话来源] 目标: [{session.name}]")
+                print(f"[*] [提问文本] {question_text}")
+                print(f"[*] [视觉附件] {'已挂载: ' + captured_img.name if captured_img else '无图片附件'}")
+                print(f"[*] [决策行动] 正在请求 Gemini 大脑 (按 [{session.name}] 隔离记忆)...")
 
-                # 请求大模型
-                print(f"[*] 正在请求 Gemini (保持 [{session.name}] 独立记忆)...")
                 reply = call_llm(session.name, question_text, image_path=captured_img)
 
                 if reply:
-                    print(f"[*] 正在自动发送回复...")
+                    print(f"[*] [回复动作] 正在向微信输入框打字发送...")
                     session.send_text_reply(reply)
-                    print(f"[{now_str}] [√] 回复发送成功！")
+                    print(f"[{now_str}] [√] 回复成功发出！")
                 else:
-                    print(f"[-] 未获取到有效回复，跳过本次发送。")
+                    print(f"[-] [回复动作] 未获取到有效回复，跳过本次发送。")
+                print(f"[{now_str}] ====================================================\n")
 
         except Exception as e:
             pass
