@@ -66,7 +66,13 @@ try:
         kernel32.SetConsoleMode(h_stdin, new_mode)
 except Exception:
     pass
-ctypes.windll.user32.SystemParametersInfoW(SPI_SETSCREENREADER, 1, 0, 1)
+
+# 激活系统屏幕无障碍辅助支持
+SPI_SETSCREENREADER = 0x0046
+try:
+    ctypes.windll.user32.SystemParametersInfoW(SPI_SETSCREENREADER, 1, 0, 1)
+except Exception:
+    pass
 
 # 微信图片存储主目录探测
 WECHAT_FILE_DIRS = [
