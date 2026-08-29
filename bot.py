@@ -46,7 +46,7 @@ from llm_service import call_llm
 # =========================================================
 # 个人私聊目标：自动自由上下文对话
 # 群聊目标：静默维护上下文与图片缓存，必须 @ 机器人才会触发作答
-GROUP_TARGETS = ["小丑", "大丑", "小丑之家", "大白鲨、轩轩、bot"]
+GROUP_TARGETS = ["小丑", "大丑", "小丑之家", "大丑之家", "大白鲨、轩轩、bot"]
 PRIVATE_TARGETS = ["bot", "渥奇", "活出自己"]
 
 LISTEN_TARGETS = PRIVATE_TARGETS + GROUP_TARGETS
@@ -523,13 +523,13 @@ def scan_matching_windows():
             # 最长匹配优先：防止 "bot" 误拦截 "大白鲨、轩轩、bot"
             sorted_targets = sorted(LISTEN_TARGETS, key=len, reverse=True)
             for target in sorted_targets:
-                if target in title and ("Qt" in cls or "WeChat" in cls or "微信" in title):
+                if target in title:
                     rect = win32gui.GetWindowRect(hwnd)
                     if (rect[2] - rect[0]) > 200 and (rect[3] - rect[1]) > 200:
                         found_hwnds[hwnd] = target
                         break
 
-            if ("WeChat" in cls or "Qt" in cls) and (title in ["微信", "WeChat"] or not title):
+            if ("WeChat" in cls or "Qt" in cls or "ChatWnd" in cls) and (title in ["微信", "WeChat"] or not title):
                 rect = win32gui.GetWindowRect(hwnd)
                 if (rect[2] - rect[0]) > 400 and (rect[3] - rect[1]) > 400:
                     found_hwnds[hwnd] = "主窗口会话"

@@ -113,8 +113,7 @@ def main():
             last = load_cache()
 
             if last is None:
-                # 首次启动：记录基线状态并发送一条上线确认通知
-                save_cache(curr)
+                # 首次启动：发送一条上线就绪通知，成功后再存入缓存
                 init_msg = (
                     f"🎮【Steam 工坊监控已就绪】\n"
                     f"📦 MOD：《{curr['title']}》\n"
@@ -123,8 +122,11 @@ def main():
                     f"👀 页面浏览：{curr['views']}\n"
                     f"⏱️ 监控中（每 {POLL_INTERVAL_SECONDS // 60} 分钟自动巡检）"
                 )
-                logger.info("Cold-start baseline initialized. Sending initial status report...")
-                push_to_wechat(init_msg)
+                logger.info("Cold-start baseline initialized. Dispatching initial status report...")
+                if push_to_wechat(init_msg):
+                    save_cache(curr)
+                else:
+                    logger.warning("Failed to deliver initial report (waiting for WeChat window). Will retry next cycle.")
             else:
                 # 增量 Diff 计算
                 delta_subs = curr["subscriptions"] - last.get("subscriptions", 0)
