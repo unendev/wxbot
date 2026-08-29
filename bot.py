@@ -414,8 +414,19 @@ class ChatSessionState:
 # =========================================================
 active_sessions = {}
 
+def cleanup_temp_files():
+    """定期清理历史临时切片图片 (保留最近10分钟)，确保磁盘永久 0 膨胀"""
+    now = time.time()
+    for p in Path(".").glob("temp_*.png"):
+        try:
+            if now - p.stat().st_mtime > 600:
+                p.unlink(missing_ok=True)
+        except Exception:
+            pass
+
 def scan_matching_windows():
     """扫描所有匹配目标名字的微信视窗"""
+    cleanup_temp_files()
     found_hwnds = {}
 
     def enum_cb(hwnd, _):
