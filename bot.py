@@ -40,8 +40,12 @@ from llm_service import call_llm
 # =========================================================
 # 配置区：监听目标与群聊识别
 # =========================================================
-LISTEN_TARGETS = ["bot", "大丑", "泽奇"]
-GROUP_TARGETS = ["大丑"]  # 群聊目标清单：群聊中必须 @ 机器人才会触发作答
+# 个人私聊目标：自动自由上下文对话
+# 群聊目标：静默维护上下文与图片缓存，必须 @ 机器人才会触发作答
+GROUP_TARGETS = ["小丑", "大丑", "小丑之家"]
+PRIVATE_TARGETS = ["bot", "渥奇", "活出自己"]
+
+LISTEN_TARGETS = PRIVATE_TARGETS + GROUP_TARGETS
 
 # 激活系统屏幕无障碍辅助支持
 SPI_SETSCREENREADER = 0x0046
