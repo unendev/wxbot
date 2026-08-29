@@ -417,10 +417,10 @@ class ChatSessionState:
         return None
 
     def send_text_reply(self, reply_text: str) -> bool:
-        """向当前窗口输入框发送回复 (物理坐标精准激活 + 剪贴板秒发)"""
+        """向当前窗口输入框发送回复 (三重保险：物理聚焦 + 剪贴板 + 智能触达)"""
         try:
             force_foreground_window(self.hwnd)
-            time.sleep(0.05)
+            time.sleep(0.06)
 
             if not self.input_ctrl or not self.input_ctrl.Exists(0.1):
                 self.locate_controls()
@@ -432,13 +432,29 @@ class ChatSessionState:
                     center_y = r.top + (r.bottom - r.top) // 2
                     # 物理鼠标点击输入框内部，强制将键盘焦点锁死在该窗口！
                     auto.Click(center_x, center_y)
-                    time.sleep(0.05)
+                    time.sleep(0.06)
 
                 auto.SetClipboardText(reply_text)
-                time.sleep(0.05)
+                time.sleep(0.06)
                 auto.SendKeys("{Ctrl}v")
-                time.sleep(0.05)
+                # 给予剪贴板和输入框充分的 UI 文本渲染缓冲时间 (120ms)
+                time.sleep(0.12)
+
+                # 【第一重保险：直接回车发送】
                 auto.SendKeys("{Enter}")
+                time.sleep(0.08)
+
+                # 【第二重保险：通过发送按钮 / Alt+S 强力兜底】
+                try:
+                    send_btn = self.ctrl.ButtonControl(searchDepth=15, Name="发送")
+                    if not send_btn.Exists(0.05):
+                        send_btn = self.ctrl.ButtonControl(searchDepth=15, Name="发送(S)")
+                    if send_btn.Exists(0.05):
+                        send_btn.Click(simulateMove=False)
+                    else:
+                        auto.SendKeys("{Alt}s")
+                except Exception:
+                    pass
 
                 self.recent_bot_replies.append(reply_text)
                 return True
