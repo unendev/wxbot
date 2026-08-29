@@ -186,7 +186,7 @@ class ChatSessionState:
     def resolve_real_name(self) -> str:
         """从微信窗口顶栏动态获取真实联系人/群名称并智能判定群聊属性"""
         # 凡是带有人数后缀 (数字) 或在群聊名单中的，一律铁律锁定为群聊模式 (必须 @ 唤醒)
-        if re.search(r"\(\d+\)", self.raw_name) or any(gt in self.raw_name for gt in GROUP_TARGETS):
+        if re.search(r"\(\d+\)", self.name) or any(gt in self.name for gt in GROUP_TARGETS):
             self.is_group = True
 
         if self.name != "主窗口会话":
