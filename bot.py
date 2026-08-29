@@ -417,27 +417,34 @@ class ChatSessionState:
         return None
 
     def send_text_reply(self, reply_text: str) -> bool:
-        """向当前窗口输入框发送回复"""
+        """向当前窗口输入框发送回复 (物理坐标精准激活 + 剪贴板秒发)"""
         try:
             force_foreground_window(self.hwnd)
-            time.sleep(0.08)
+            time.sleep(0.05)
 
             if not self.input_ctrl or not self.input_ctrl.Exists(0.1):
                 self.locate_controls()
 
-            val_pattern = self.input_ctrl.GetValuePattern()
-            if val_pattern:
-                val_pattern.SetValue(reply_text)
+            if self.input_ctrl and self.input_ctrl.Exists(0.1):
+                r = self.input_ctrl.BoundingRectangle
+                if (r.right - r.left) > 0 and (r.bottom - r.top) > 0:
+                    center_x = r.left + (r.right - r.left) // 2
+                    center_y = r.top + (r.bottom - r.top) // 2
+                    # 物理鼠标点击输入框内部，强制将键盘焦点锁死在该窗口！
+                    auto.Click(center_x, center_y)
+                    time.sleep(0.05)
+
+                auto.SetClipboardText(reply_text)
+                time.sleep(0.05)
+                auto.SendKeys("{Ctrl}v")
+                time.sleep(0.05)
+                auto.SendKeys("{Enter}")
+
+                self.recent_bot_replies.append(reply_text)
+                return True
             else:
-                self.input_ctrl.SendKeys(reply_text)
-
-            time.sleep(0.05)
-            self.input_ctrl.Click(simulateMove=False)
-            time.sleep(0.05)
-            auto.SendKeys("{Enter}")
-
-            self.recent_bot_replies.append(reply_text)
-            return True
+                logger.warning("[%s] Input control not found for sending", self.name)
+                return False
         except Exception as e:
             logger.error("[%s] Failed to send reply text: %s", self.name, e)
             return False
@@ -697,8 +704,8 @@ def main():
                             logger.warning("[%s] Failed to capture image", session.name)
 
                     if text and text not in IMAGE_MARKERS and not any(m == text for m in IMAGE_MARKERS):
-                        # 检查是否有 @ 唤醒标记
-                        if "@" in text or "@" in item_obj.Name:
+                        # 检查是否有 @ 唤醒标记 (严格只检查真实收到的文字内容)
+                        if "@" in text:
                             has_at_mention = True
 
                         # 剥离开头的 @ 提到前缀 (如 @大丑、@bot)，避免大模型产生误解
