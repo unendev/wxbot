@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
 """
-LLM 统一服务调用层 (Google Gemini API)
-标准模块化设计：
-- 严格的多会话独立上下文记忆隔离 (Per-Session Memory Pool)
-- 30 轮滑动窗口上下文管理 (FIFO)
-- 30 分钟无活跃自然过期
-- Markdown 格式安全清洗
-- 工业级标准 Logging 输出
+大模型对话服务与多会话记忆隔离管理 (统一兼容层)
+支持特性：
+1. 双协议支持：OpenAI 兼容接口 (LLM_API_URL / 本地代理) 与 Google 官方接口 (GEMINI_API_KEY)
+2. 多模态原生视觉图文输入 (Base64 inline_data / image_url)
+3. 30 轮多会话严格隔离滑动记忆池 (FIFO)
+4. 微信纯文本输出清洗
+5. 工业级标准 Logging
 """
 import os
 import re
@@ -19,26 +19,27 @@ from dotenv import load_dotenv
 
 logger = logging.getLogger("wxbot.llm")
 
-# 加载 .env 环境变量
+# 加载 .env
 env_path = Path(__file__).parent / ".env"
 load_dotenv(dotenv_path=env_path)
 
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "")
-GEMINI_BASE_URL = os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com").rstrip("/")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+LLM_API_URL = os.getenv("LLM_API_URL", "").strip()
+LLM_API_KEY = os.getenv("LLM_API_KEY", "").strip()
+LLM_MODEL = os.getenv("LLM_MODEL", "gemini-3.5-flash-lite").strip()
 
-# 隔离记忆池结构：{ chat_name: {"history": [ {...}, ... ], "last_time": timestamp} }
-memory_pool = {}
-MAX_HISTORY_TURNS = 30
-SESSION_TIMEOUT_SECONDS = 1800  # 30 分钟无活跃自动重置会话
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
+GEMINI_BASE_URL = os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com").rstrip("/")
 
 SYSTEM_INSTRUCTION = (
     "你是运行在微信上的个人 AI 智能助手。你的回答应该简洁、亲切、通俗易懂，适合微信即时通讯场景。"
     "严格要求：由于微信不支持 Markdown 语法，请不要使用任何 Markdown 加粗（**）、标题（#）、列表符号（* 或 -）等排版，输出纯文本即可。"
 )
 
+MAX_HISTORY_TURNS = 30
+SESSION_TIMEOUT_SECONDS = 1800
+memory_pool = {}
+
 def clean_markdown_to_text(md_text: str) -> str:
-    """清洗大模型输出中的 Markdown 语法，输出最适合微信阅读的纯文本"""
     if not md_text:
         return ""
     text = re.sub(r"^#{1,6}\s+", "", md_text, flags=re.MULTILINE)
@@ -54,7 +55,6 @@ def clean_markdown_to_text(md_text: str) -> str:
     return text.strip()
 
 def get_or_create_session(chat_name: str) -> list:
-    """获取指定会话的历史记录，并执行过期重置与滑动窗口管理"""
     now = time.time()
     if chat_name in memory_pool:
         session_data = memory_pool[chat_name]
@@ -68,93 +68,97 @@ def get_or_create_session(chat_name: str) -> list:
     return memory_pool[chat_name]["history"]
 
 def call_llm(chat_name: str, user_prompt: str, image_path: Path = None) -> str:
-    """统一调用 Gemini API 生成回答（支持纯文本与多模态图文输入）"""
-    if not GEMINI_API_KEY:
-        logger.error("GEMINI_API_KEY is not configured in .env")
-        return "【系统提示】尚未配置 GEMINI_API_KEY，请检查 .env 配置文件。"
-
-    url = f"{GEMINI_BASE_URL}/v1beta/models/{GEMINI_MODEL}:generateContent?key={GEMINI_API_KEY}"
     history = get_or_create_session(chat_name)
 
-    user_parts = []
-
-    # 1. 挂载图片多模态数据
-    if image_path and image_path.exists():
-        try:
-            with open(image_path, "rb") as f:
-                b64_data = base64.b64encode(f.read()).decode("utf-8")
-
-            ext = image_path.suffix.lower()
-            mime_type = "image/png" if ext == ".png" else "image/jpeg"
-
-            img_part = {
-                "inline_data": {
-                    "mime_type": mime_type,
-                    "data": b64_data
-                }
-            }
-            user_parts.append(img_part)
-        except Exception as e:
-            logger.warning("[%s] Failed to encode image '%s': %s", chat_name, image_path.name, e)
-
-    # 2. 挂载用户提问文字
-    if user_prompt:
-        user_parts.append({"text": user_prompt})
-
-    if not user_parts:
-        return ""
-
-    contents = list(history)
-    contents.append({
-        "role": "user",
-        "parts": user_parts
-    })
-
-    payload = {
-        "contents": contents,
-        "system_instruction": {
-            "parts": [{"text": SYSTEM_INSTRUCTION}]
-        },
-        "generationConfig": {
-            "temperature": 0.7,
-            "maxOutputTokens": 2048,
-        }
-    }
-
-    t0 = time.time()
-    try:
-        resp = requests.post(url, json=payload, timeout=45)
-        cost = time.time() - t0
-
-        if resp.status_code == 200:
-            data = resp.json()
+    # 1. 优先使用 OpenAI 兼容模式 (LLM_API_URL)
+    if LLM_API_URL:
+        user_content = []
+        if image_path and image_path.exists():
             try:
-                raw_text = data["candidates"][0]["content"]["parts"][0]["text"]
+                with open(image_path, "rb") as f:
+                    b64 = base64.b64encode(f.read()).decode("utf-8")
+                user_content.append({"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}})
+            except Exception as e:
+                logger.warning("[%s] Failed to encode image: %s", chat_name, e)
+
+        if user_prompt:
+            user_content.append({"type": "text", "text": user_prompt})
+
+        if not user_content:
+            return ""
+
+        # 兼容简易单文本形式
+        final_user_msg = user_prompt if (len(user_content) == 1 and not image_path) else user_content
+
+        messages = [{"role": "system", "content": SYSTEM_INSTRUCTION}] + history + [{"role": "user", "content": final_user_msg}]
+        payload = {
+            "model": LLM_MODEL,
+            "messages": messages,
+            "temperature": 0.7
+        }
+        headers = {"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"}
+
+        t0 = time.time()
+        try:
+            resp = requests.post(LLM_API_URL, headers=headers, json=payload, timeout=45)
+            cost = time.time() - t0
+            if resp.status_code == 200:
+                raw_text = resp.json()["choices"][0]["message"]["content"].strip()
                 clean_reply = clean_markdown_to_text(raw_text)
 
-                # 记录进上下文记忆池
-                history.append({"role": "user", "parts": user_parts})
-                history.append({"role": "model", "parts": [{"text": clean_reply}]})
-
-                # 维持 30 轮滑动窗口
+                history.append({"role": "user", "content": final_user_msg})
+                history.append({"role": "assistant", "content": clean_reply})
                 if len(history) > MAX_HISTORY_TURNS * 2:
                     history = history[-MAX_HISTORY_TURNS * 2:]
                     memory_pool[chat_name]["history"] = history
 
-                logger.info(
-                    "[%s] LLM generation succeeded (duration: %.2fs, memory: %d/%d)",
-                    chat_name, cost, len(history) // 2, MAX_HISTORY_TURNS
-                )
+                logger.info("[%s] LLM generation succeeded (duration: %.2fs, memory: %d/%d)", chat_name, cost, len(history)//2, MAX_HISTORY_TURNS)
                 return clean_reply
-            except (KeyError, IndexError) as e:
-                logger.error("[%s] Failed to parse LLM response format: %s", chat_name, e)
-                return "抱歉，未能正确解析回答。"
-        else:
-            logger.error("[%s] LLM returned HTTP %d: %s", chat_name, resp.status_code, resp.text)
-            return f"【服务异常】大模型接口返回 HTTP {resp.status_code}"
-    except requests.exceptions.Timeout:
-        logger.error("[%s] LLM request timed out (>45s)", chat_name)
-        return "请求超时，大模型正在忙碌中，请稍后再试。"
-    except Exception as e:
-        logger.error("[%s] LLM request exception: %s", chat_name, e)
-        return f"发生未知错误: {str(e)}"
+            else:
+                logger.error("[%s] LLM API returned HTTP %d: %s", chat_name, resp.status_code, resp.text)
+                return f"【服务异常】大模型返回 HTTP {resp.status_code}"
+        except Exception as e:
+            logger.error("[%s] LLM request exception: %s", chat_name, e)
+            return "大模型连接超时，请稍后再试。"
+
+    # 2. 官方 Google Gemini 协议
+    elif GEMINI_API_KEY:
+        url = f"{GEMINI_BASE_URL}/v1beta/models/{LLM_MODEL or 'gemini-2.0-flash'}:generateContent?key={GEMINI_API_KEY}"
+        user_parts = []
+        if image_path and image_path.exists():
+            with open(image_path, "rb") as f:
+                b64 = base64.b64encode(f.read()).decode("utf-8")
+            user_parts.append({"inline_data": {"mime_type": "image/jpeg", "data": b64}})
+        if user_prompt:
+            user_parts.append({"text": user_prompt})
+
+        contents = list(history) + [{"role": "user", "parts": user_parts}]
+        payload = {
+            "contents": contents,
+            "system_instruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
+            "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2048}
+        }
+        t0 = time.time()
+        try:
+            resp = requests.post(url, json=payload, timeout=45)
+            cost = time.time() - t0
+            if resp.status_code == 200:
+                raw_text = resp.json()["candidates"][0]["content"]["parts"][0]["text"]
+                clean_reply = clean_markdown_to_text(raw_text)
+                history.append({"role": "user", "parts": user_parts})
+                history.append({"role": "model", "parts": [{"text": clean_reply}]})
+                if len(history) > MAX_HISTORY_TURNS * 2:
+                    history = history[-MAX_HISTORY_TURNS * 2:]
+                    memory_pool[chat_name]["history"] = history
+                logger.info("[%s] LLM generation succeeded (duration: %.2fs, memory: %d/%d)", chat_name, cost, len(history)//2, MAX_HISTORY_TURNS)
+                return clean_reply
+            else:
+                logger.error("[%s] Gemini API returned HTTP %d: %s", chat_name, resp.status_code, resp.text)
+                return f"【服务异常】Gemini API 返回 HTTP {resp.status_code}"
+        except Exception as e:
+            logger.error("[%s] Gemini request exception: %s", chat_name, e)
+            return "大模型连接超时，请稍后再试。"
+
+    else:
+        logger.error("No LLM configuration found in .env")
+        return "【系统提示】尚未配置大模型 API，请检查 .env 文件。"
