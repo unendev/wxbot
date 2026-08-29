@@ -202,12 +202,12 @@ class ChatSessionState:
                     if r.left > mid_x:
                         is_self = True
 
-                is_image = False
+                is_image = (
+                    "[图片]" in raw_text or "图片" in raw_text or "[Image]" in raw_text or raw_text == "Image"
+                )
                 text = raw_text
 
-                if raw_text in ["[图片]", "图片"]:
-                    is_image = True
-                elif not raw_text:
+                if not is_image and not raw_text:
                     if width >= 40 and height >= 40:
                         text = "[图片]"
                         is_image = True

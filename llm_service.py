@@ -30,11 +30,6 @@ LLM_MODEL = os.getenv("LLM_MODEL", "gemini-3.5-flash-lite").strip()
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY", "").strip()
 GEMINI_BASE_URL = os.getenv("GEMINI_BASE_URL", "https://generativelanguage.googleapis.com").rstrip("/")
 
-SYSTEM_INSTRUCTION = (
-    "你是运行在微信上的个人 AI 智能助手。你的回答应该简洁、亲切、通俗易懂，适合微信即时通讯场景。"
-    "严格要求：由于微信不支持 Markdown 语法，请不要使用任何 Markdown 加粗（**）、标题（#）、列表符号（* 或 -）等排版，输出纯文本即可。"
-)
-
 MAX_HISTORY_TURNS = 30
 SESSION_TIMEOUT_SECONDS = 1800
 memory_pool = {}
@@ -90,7 +85,7 @@ def call_llm(chat_name: str, user_prompt: str, image_path: Path = None) -> str:
         # 兼容简易单文本形式
         final_user_msg = user_prompt if (len(user_content) == 1 and not image_path) else user_content
 
-        messages = [{"role": "system", "content": SYSTEM_INSTRUCTION}] + history + [{"role": "user", "content": final_user_msg}]
+        messages = history + [{"role": "user", "content": final_user_msg}]
         payload = {
             "model": LLM_MODEL,
             "messages": messages,
@@ -135,7 +130,6 @@ def call_llm(chat_name: str, user_prompt: str, image_path: Path = None) -> str:
         contents = list(history) + [{"role": "user", "parts": user_parts}]
         payload = {
             "contents": contents,
-            "system_instruction": {"parts": [{"text": SYSTEM_INSTRUCTION}]},
             "generationConfig": {"temperature": 0.7, "maxOutputTokens": 2048}
         }
         t0 = time.time()
