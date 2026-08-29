@@ -35,19 +35,33 @@ SESSION_TIMEOUT_SECONDS = 1800
 memory_pool = {}
 
 def clean_markdown_to_text(md_text: str) -> str:
+    """终极 Markdown 清洗转换器：彻底剔除引用符(>)、粗斜体(**)、代码块(```)、标题(#)等所有标记"""
     if not md_text:
         return ""
-    text = re.sub(r"^#{1,6}\s+", "", md_text, flags=re.MULTILINE)
-    text = re.sub(r"\*\*(.*?)\*\*", r"\1", text)
-    text = re.sub(r"\*(.*?)\*", r"\1", text)
-    text = re.sub(r"__(.*?)__", r"\1", text)
-    text = re.sub(r"~~(.*?)~~", r"\1", text)
-    text = re.sub(r"```[\w]*\n([\s\S]*?)```", r"\1", text)
-    text = re.sub(r"`(.*?)`", r"\1", text)
-    text = re.sub(r"^\s*[-*+]\s+", "", text, flags=re.MULTILINE)
-    text = re.sub(r"\[(.*?)\]\(.*?\)", r"\1", text)
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
+    t = md_text
+    # 1. 移除代码块标记 (保留代码块内文字)
+    t = re.sub(r"```[\w]*\n?([\s\S]*?)```", r"\1", t)
+    # 2. 移除行内代码 `code`
+    t = re.sub(r"`([^`]+)`", r"\1", t)
+    # 3. 移除粗体、斜体、删除线 **text**, *text*, ~~text~~, __text__
+    t = re.sub(r"\*\*([^*]+)\*\*", r"\1", t)
+    t = re.sub(r"\*([^*]+)\*", r"\1", t)
+    t = re.sub(r"__([^_]+)__", r"\1", t)
+    t = re.sub(r"~~([^~]+)~~", r"\1", t)
+    # 4. 移除标题符号 # Header
+    t = re.sub(r"^#{1,6}\s*", "", t, flags=re.MULTILINE)
+    # 5. 移除 Markdown 引用符号 > Blockquote (核心修复)
+    t = re.sub(r"^\s*>\s*", "", t, flags=re.MULTILINE)
+    # 6. 移除无序列表符号 - list, * list, + list
+    t = re.sub(r"^\s*[-*+]\s+", "", t, flags=re.MULTILINE)
+    # 7. 移除分割线 ---, ***, ___
+    t = re.sub(r"^\s*[-*_]{3,}\s*$", "", t, flags=re.MULTILINE)
+    # 8. 移除超链接 [text](url) -> text, ![img](url) -> ""
+    t = re.sub(r"!\[(.*?)\]\(.*?\)", r"\1", t)
+    t = re.sub(r"\[(.*?)\]\(.*?\)", r"\1", t)
+    # 9. 压缩多余空行
+    t = re.sub(r"\n{3,}", "\n\n", t)
+    return t.strip()
 
 def get_or_create_session(chat_name: str) -> list:
     now = time.time()
