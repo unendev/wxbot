@@ -164,23 +164,23 @@ class ChatSessionState:
         self.initialized = False
 
     def locate_controls(self) -> bool:
-        """寻找消息列表和输入框控件"""
+        """寻找消息列表和输入框控件 (极速精准定位)"""
         try:
-            wnd_rect = self.ctrl.BoundingRectangle
-            for child in self.ctrl.GetChildren():
-                if child.ControlTypeName == "ListControl" and child.BoundingRectangle.left > (wnd_rect.left + 80):
-                    self.msg_list_ctrl = child
-                    break
-            if not self.msg_list_ctrl:
-                self.msg_list_ctrl = self.ctrl.ListControl(searchDepth=25)
+            # 1. 查找消息列表 (直接深度搜索 ListControl)
+            list_ctrl = self.ctrl.ListControl(searchDepth=12)
+            if not list_ctrl.Exists(0.2):
+                list_ctrl = self.ctrl.ListControl(searchDepth=25)
+            self.msg_list_ctrl = list_ctrl
 
-            input_box = self.ctrl.EditControl(searchDepth=35)
+            # 2. 查找输入框 (直接深度搜索 EditControl)
+            input_box = self.ctrl.EditControl(searchDepth=12)
             if not input_box.Exists(0.2):
-                input_box = self.ctrl.EditControl(searchDepth=20)
+                input_box = self.ctrl.EditControl(searchDepth=25)
             self.input_ctrl = input_box
 
-            return self.msg_list_ctrl.Exists(0.2) and self.input_ctrl.Exists(0.2)
-        except Exception:
+            return self.msg_list_ctrl.Exists(0.3) and self.input_ctrl.Exists(0.3)
+        except Exception as e:
+            logger.warning("[%s] Failed to locate controls: %s", self.name, e)
             return False
 
     def resolve_real_name(self) -> str:
@@ -573,8 +573,10 @@ def main():
                                 "Attached session: [%s] (HWND: %d, Mode: %s)",
                                 session.name, hwnd, "Group" if session.is_group else "Private"
                             )
-                    except Exception:
-                        pass
+                        else:
+                            logger.warning("Discovered window [%s] (HWND: %d) but failed to locate list/edit controls", target_name, hwnd)
+                    except Exception as e:
+                        logger.warning("Error attaching to window [%s] (HWND: %d): %s", target_name, hwnd, e)
 
             # -------------------------------------------------------------
             # 【主动推送网关任务派发调度】
