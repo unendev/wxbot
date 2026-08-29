@@ -47,6 +47,13 @@ PRIVATE_TARGETS = ["bot", "渥奇", "活出自己"]
 
 LISTEN_TARGETS = PRIVATE_TARGETS + GROUP_TARGETS
 
+# 视觉目标全量标记集合 (覆盖普通图片、高清原图、大表情包、自定义动图表情、英文Sticker等)
+IMAGE_MARKERS = {
+    "[图片]", "图片", "[Image]", "Image",
+    "[动画表情]", "动画表情", "[表情]", "表情",
+    "[Sticker]", "Sticker", "[Emoji]", "Emoji"
+}
+
 # 禁用 Windows 控制台快速编辑模式 (彻底防止鼠标误触点击黑框导致 Python 进程被 Windows 强制挂起暂停)
 try:
     kernel32 = ctypes.windll.kernel32
@@ -212,9 +219,7 @@ class ChatSessionState:
                     if r.left > mid_x:
                         is_self = True
 
-                is_image = (
-                    "[图片]" in raw_text or "图片" in raw_text or "[Image]" in raw_text or raw_text == "Image"
-                )
+                is_image = any(m in raw_text for m in IMAGE_MARKERS) or raw_text in IMAGE_MARKERS
                 text = raw_text
 
                 if not is_image and not raw_text:
@@ -518,7 +523,7 @@ def main():
                         else:
                             logger.warning("[%s] Failed to capture image", session.name)
 
-                    if text and text not in ["[图片]", "图片", "Image", "[Image]"]:
+                    if text and text not in IMAGE_MARKERS and not any(m == text for m in IMAGE_MARKERS):
                         # 检查是否有 @ 唤醒标记
                         if "@" in text or "@" in item_obj.Name:
                             has_at_mention = True
