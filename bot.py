@@ -47,8 +47,18 @@ PRIVATE_TARGETS = ["bot", "渥奇", "活出自己"]
 
 LISTEN_TARGETS = PRIVATE_TARGETS + GROUP_TARGETS
 
-# 激活系统屏幕无障碍辅助支持
-SPI_SETSCREENREADER = 0x0046
+# 禁用 Windows 控制台快速编辑模式 (彻底防止鼠标误触点击黑框导致 Python 进程被 Windows 强制挂起暂停)
+try:
+    kernel32 = ctypes.windll.kernel32
+    h_stdin = kernel32.GetStdHandle(-10)  # STD_INPUT_HANDLE
+    mode = ctypes.c_uint32()
+    if kernel32.GetConsoleMode(h_stdin, ctypes.byref(mode)):
+        ENABLE_QUICK_EDIT_MODE = 0x0040
+        ENABLE_EXTENDED_FLAGS = 0x0080
+        new_mode = (mode.value & ~ENABLE_QUICK_EDIT_MODE) | ENABLE_EXTENDED_FLAGS
+        kernel32.SetConsoleMode(h_stdin, new_mode)
+except Exception:
+    pass
 ctypes.windll.user32.SystemParametersInfoW(SPI_SETSCREENREADER, 1, 0, 1)
 
 # 微信图片存储主目录探测
