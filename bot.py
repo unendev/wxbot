@@ -518,11 +518,40 @@ def main():
                         else:
                             logger.warning("[%s] Failed to capture image", session.name)
 
-                    if text and text not in ["[图片]", "图片"]:
-                        if "@" in text:
+                    if text and text not in ["[图片]", "图片", "Image", "[Image]"]:
+                        # 检查是否有 @ 唤醒标记
+                        if "@" in text or "@" in item_obj.Name:
                             has_at_mention = True
-                        clean_t = re.sub(r"^@\S+[\s\u2005]*", "", text).strip()
-                        incoming_texts.append(clean_t if clean_t else text)
+
+                        # 剥离开头的 @ 提到前缀 (如 @大丑、@bot)，避免大模型产生误解
+                        clean_t = re.sub(r"@\S+[\s\u2005]*", "", text).strip()
+                        if not clean_t:
+                            clean_t = text.strip()
+
+                        # 群聊模式下：提取发言群友昵称，格式化为 【群友昵称】: 消息内容
+                        if session.is_group:
+                            sender_name = ""
+                            # 从 WeChat 4.0 控件树中提取发送人
+                            try:
+                                for sub in item_obj.GetChildren():
+                                    if sub.ControlTypeName in ["ButtonControl", "TextControl"] and sub.Name and sub.Name != text and sub.Name not in ["[图片]", "Image"]:
+                                        sender_name = sub.Name.strip()
+                                        break
+                            except Exception:
+                                pass
+                            
+                            # 兜底从冒号中提取
+                            if not sender_name and (":" in item_obj.Name or "：" in item_obj.Name):
+                                parts = re.split(r"[:：]", item_obj.Name, maxsplit=1)
+                                if len(parts) == 2 and parts[0].strip():
+                                    sender_name = parts[0].strip()
+
+                            if sender_name:
+                                incoming_texts.append(f"【{sender_name}】: {clean_t}")
+                            else:
+                                incoming_texts.append(clean_t)
+                        else:
+                            incoming_texts.append(clean_t)
 
                 # =====================================================
                 # 拟人化触发守卫 (Trigger Guard)
