@@ -147,6 +147,27 @@ def find_latest_image_file(max_age_seconds: float = 8.0) -> Path:
 
     return latest_file
 
+def force_foreground_window(hwnd: int):
+    """强力穿透式将窗口置于前台 (突破 Windows SetForegroundWindow 权限锁)"""
+    try:
+        if win32gui.IsIconic(hwnd):
+            win32gui.ShowWindow(hwnd, 9)  # SW_RESTORE
+        else:
+            win32gui.ShowWindow(hwnd, 5)  # SW_SHOW
+
+        # 模拟 Alt 键穿透 Windows 焦点锁定
+        ctypes.windll.user32.keybd_event(0x12, 0, 0, 0)
+        ctypes.windll.user32.keybd_event(0x12, 0, 2, 0)
+
+        win32gui.BringWindowToTop(hwnd)
+        win32gui.SetForegroundWindow(hwnd)
+    except Exception:
+        try:
+            win32gui.SetWindowPos(hwnd, -1, 0, 0, 0, 0, 3)  # HWND_TOPMOST, SWP_NOMOVE | SWP_NOSIZE
+            win32gui.SetWindowPos(hwnd, -2, 0, 0, 0, 0, 3)  # HWND_NOTOPMOST
+        except Exception:
+            pass
+
 # =========================================================
 # 会话上下文状态管理器 (渐进式双引擎)
 # =========================================================
@@ -397,8 +418,8 @@ class ChatSessionState:
     def send_text_reply(self, reply_text: str) -> bool:
         """向当前窗口输入框发送回复"""
         try:
-            win32gui.SetForegroundWindow(self.hwnd)
-            time.sleep(0.05)
+            force_foreground_window(self.hwnd)
+            time.sleep(0.08)
 
             if not self.input_ctrl or not self.input_ctrl.Exists(0.1):
                 self.locate_controls()
