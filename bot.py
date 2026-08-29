@@ -606,10 +606,19 @@ def main():
                 try:
                     target_name, push_text, push_img, resp_ev, res_box = push_tasks_queue.get_nowait()
                     matched_session = None
+
+                    # 1. 精确全名匹配 (最高优先级，彻底防止 "渥奇" 误发到群聊)
                     for s in active_sessions.values():
-                        if target_name in s.name or s.name in target_name:
+                        if s.name == target_name:
                             matched_session = s
                             break
+
+                    # 2. 前缀包含匹配 (兼容带人数后缀的群聊，如 "大丑之家" 匹配 "大丑之家 (5)")
+                    if not matched_session:
+                        for s in active_sessions.values():
+                            if s.name.startswith(target_name) or target_name in s.name:
+                                matched_session = s
+                                break
 
                     if matched_session:
                         success = matched_session.send_text_reply(push_text)
