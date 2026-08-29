@@ -180,16 +180,23 @@ class ChatSessionState:
             return False
 
     def resolve_real_name(self) -> str:
-        """从微信窗口顶栏动态获取真实联系人/群名称"""
+        """从微信窗口顶栏动态获取真实联系人/群名称并智能判定群聊属性"""
+        # 凡是带有人数后缀 (数字) 或在群聊名单中的，一律铁律锁定为群聊模式 (必须 @ 唤醒)
+        if re.search(r"\(\d+\)", self.raw_name) or any(gt in self.raw_name for gt in GROUP_TARGETS):
+            self.is_group = True
+
         if self.name != "主窗口会话":
             return self.name
+
         try:
+            sorted_targets = sorted(LISTEN_TARGETS, key=len, reverse=True)
             for child in self.ctrl.GetChildren():
                 txt = child.Name.strip() if child.Name else ""
-                if txt in LISTEN_TARGETS:
-                    self.name = txt
-                    self.is_group = txt in GROUP_TARGETS
-                    return txt
+                for target in sorted_targets:
+                    if target in txt:
+                        self.name = target
+                        self.is_group = re.search(r"\(\d+\)", txt) is not None or any(gt in txt for gt in GROUP_TARGETS)
+                        return self.name
         except Exception:
             pass
         return self.name
@@ -434,11 +441,14 @@ def scan_matching_windows():
             title = win32gui.GetWindowText(hwnd).strip()
             cls = win32gui.GetClassName(hwnd)
 
-            for target in LISTEN_TARGETS:
+            # 最长匹配优先：防止 "bot" 误拦截 "大白鲨、轩轩、bot"
+            sorted_targets = sorted(LISTEN_TARGETS, key=len, reverse=True)
+            for target in sorted_targets:
                 if target in title and ("Qt" in cls or "WeChat" in cls or "微信" in title):
                     rect = win32gui.GetWindowRect(hwnd)
                     if (rect[2] - rect[0]) > 200 and (rect[3] - rect[1]) > 200:
                         found_hwnds[hwnd] = target
+                        break
 
             if ("WeChat" in cls or "Qt" in cls) and (title in ["微信", "WeChat"] or not title):
                 rect = win32gui.GetWindowRect(hwnd)
