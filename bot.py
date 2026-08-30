@@ -417,20 +417,35 @@ class ChatSessionState:
         return None
 
     def send_text_reply(self, reply_text: str) -> bool:
-        """向当前窗口输入框发送回复 (三重保险：物理聚焦 + 剪贴板 + 智能触达)"""
+        """向当前窗口输入框发送回复 (绝对 Z-Order 顶置 + 控件级焦点死锁 + 智能防串窗)"""
         try:
-            force_foreground_window(self.hwnd)
-            time.sleep(0.06)
+            # 1. 绝对 Z-Order 顶置：强行将目标窗口拉到桌面最上层，防止被重叠窗口拦截鼠标
+            try:
+                win32gui.ShowWindow(self.hwnd, 9)  # SW_RESTORE
+                win32gui.ShowWindow(self.hwnd, 5)  # SW_SHOW
+                win32gui.SetWindowPos(self.hwnd, -1, 0, 0, 0, 0, 3)  # HWND_TOPMOST (强行最顶层)
+                win32gui.SetWindowPos(self.hwnd, -2, 0, 0, 0, 0, 3)  # HWND_NOTOPMOST (恢复常规层级但保持最前)
+                win32gui.BringWindowToTop(self.hwnd)
+                win32gui.SetForegroundWindow(self.hwnd)
+            except Exception:
+                pass
+            time.sleep(0.08)
 
             if not self.input_ctrl or not self.input_ctrl.Exists(0.1):
                 self.locate_controls()
 
             if self.input_ctrl and self.input_ctrl.Exists(0.1):
+                # 2. 控件级逻辑焦点激活 (不依赖物理鼠标碰撞，直接绑定控件)
+                try:
+                    self.input_ctrl.SetFocus()
+                except Exception:
+                    pass
+
+                # 3. 物理鼠标点击已顶置窗口的输入框内部
                 r = self.input_ctrl.BoundingRectangle
                 if (r.right - r.left) > 0 and (r.bottom - r.top) > 0:
                     center_x = r.left + (r.right - r.left) // 2
                     center_y = r.top + (r.bottom - r.top) // 2
-                    # 物理鼠标点击输入框内部，强制将键盘焦点锁死在该窗口！
                     auto.Click(center_x, center_y)
                     time.sleep(0.06)
 
@@ -444,7 +459,7 @@ class ChatSessionState:
                 auto.SendKeys("{Enter}")
                 time.sleep(0.08)
 
-                # 【第二重保险：通过发送按钮 / Alt+S 强力兜底】
+                # 【第二重保险：通过当前会话专属发送按钮 / Alt+S 强力兜底】
                 try:
                     send_btn = self.ctrl.ButtonControl(searchDepth=15, Name="发送")
                     if not send_btn.Exists(0.05):
