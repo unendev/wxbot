@@ -46,7 +46,7 @@ from llm_service import call_llm
 # =========================================================
 # 个人私聊目标：自动自由上下文对话
 # 群聊目标：静默维护上下文与图片缓存，必须精准 @ 机器人才会触发作答
-GROUP_TARGETS = ["小丑", "大丑", "小丑之家", "大丑之家", "大白鲨、轩轩、bot"]
+GROUP_TARGETS = ["小丑", "大丑", "小丑之家", "大丑之家", "大白鲨、轩轩、bot", "问问看"]
 PRIVATE_TARGETS = ["bot", "渥奇", "活出自己"]
 
 LISTEN_TARGETS = PRIVATE_TARGETS + GROUP_TARGETS
