@@ -52,8 +52,8 @@ PRIVATE_TARGETS = ["bot", "渥奇", "活出自己"]
 LISTEN_TARGETS = PRIVATE_TARGETS + GROUP_TARGETS
 
 # 机器人自身专属外号名单 (群聊中唯有 @ 这些名字才会唤醒机器人，@ 别人 100% 保持静默)
-# 注意：@小丑 会唤醒机器人，@大丑 是真人因此保持静默
-BOT_ALIASES = [a.strip() for a in os.getenv("BOT_ALIASES", "bot,Bot,BOT,小丑,大白鲨、轩轩、bot,AI,机器人").split(",") if a.strip()]
+# 大丑和小丑均识别为机器人自身的名字
+BOT_ALIASES = [a.strip() for a in os.getenv("BOT_ALIASES", "bot,Bot,BOT,大丑,小丑,大白鲨、轩轩、bot,AI,机器人").split(",") if a.strip()]
 
 # 视觉目标全量标记集合 (覆盖普通图片、高清原图、大表情包、自定义动图表情、英文Sticker等)
 IMAGE_MARKERS = {
