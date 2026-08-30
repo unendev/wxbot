@@ -45,11 +45,14 @@ from llm_service import call_llm
 # 配置区：监听目标与群聊识别
 # =========================================================
 # 个人私聊目标：自动自由上下文对话
-# 群聊目标：静默维护上下文与图片缓存，必须 @ 机器人才会触发作答
+# 群聊目标：静默维护上下文与图片缓存，必须精准 @ 机器人才会触发作答
 GROUP_TARGETS = ["小丑", "大丑", "小丑之家", "大丑之家", "大白鲨、轩轩、bot"]
 PRIVATE_TARGETS = ["bot", "渥奇", "活出自己"]
 
 LISTEN_TARGETS = PRIVATE_TARGETS + GROUP_TARGETS
+
+# 机器人自身专属外号名单 (群聊中唯有 @ 这些名字才会唤醒机器人，@ 别人 100% 保持静默)
+BOT_ALIASES = [a.strip() for a in os.getenv("BOT_ALIASES", "bot,Bot,BOT,大丑,小丑,大白鲨、轩轩、bot,AI,机器人").split(",") if a.strip()]
 
 # 视觉目标全量标记集合 (覆盖普通图片、高清原图、大表情包、自定义动图表情、英文Sticker等)
 IMAGE_MARKERS = {
@@ -735,12 +738,19 @@ def main():
                             logger.warning("[%s] Failed to capture image", session.name)
 
                     if text and text not in IMAGE_MARKERS and not any(m == text for m in IMAGE_MARKERS):
-                        # 检查是否有 @ 唤醒标记 (严格只检查真实收到的文字内容)
+                        # 检查是否有针对机器人自身的精准 @ 唤醒标记 (唯有叫机器人名字才唤醒，@ 别人 100% 闭嘴)
                         if "@" in text:
-                            has_at_mention = True
+                            mentions = re.findall(r"@([^\s\u2005\u00a0:：]+)", text)
+                            for m in mentions:
+                                if any(alias.lower() == m.lower() or alias.lower() in m.lower() or m.lower() in alias.lower() for alias in BOT_ALIASES):
+                                    has_at_mention = True
+                                    break
 
-                        # 剥离开头的 @ 提到前缀 (如 @大丑、@bot)，避免大模型产生误解
-                        clean_t = re.sub(r"@\S+[\s\u2005]*", "", text).strip()
+                        # 剥离针对机器人的 @ 提到前缀 (如 @大丑、@bot)，避免大模型产生误解
+                        clean_t = text
+                        for alias in BOT_ALIASES:
+                            clean_t = re.sub(rf"@{re.escape(alias)}[\s\u2005\u00a0]*", "", clean_t, flags=re.IGNORECASE)
+                        clean_t = clean_t.strip()
                         if not clean_t:
                             clean_t = text.strip()
 
