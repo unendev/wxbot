@@ -16,8 +16,8 @@ import time
 import json
 import queue
 import ctypes
-import logging
 import threading
+import random
 from pathlib import Path
 from collections import deque
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -421,8 +421,13 @@ class ChatSessionState:
         return None
 
     def send_text_reply(self, reply_text: str) -> bool:
-        """向当前窗口输入框发送回复 (绝对 Z-Order 顶置 + 控件级焦点死锁 + 智能防串窗)"""
+        """向当前窗口输入框发送回复 (拟人自然打字时延 + 绝对 Z-Order 顶置 + 控件级焦点死锁 + 智能防串窗)"""
         try:
+            # 0. 拟人化自然打字与读题时延注入 (彻底抹除 180字/秒 超人类机器瞬发特征)
+            base_jitter = random.uniform(1.2, 2.5)  # 随机自然思考抖动
+            typing_delay = min(len(reply_text) * 0.025, 3.0)  # 动态打字耗时 (每字约 0.025s，上限 3s)
+            time.sleep(base_jitter + typing_delay)
+
             # 1. 绝对 Z-Order 顶置：强行将目标窗口拉到桌面最上层，防止被重叠窗口拦截鼠标
             try:
                 win32gui.ShowWindow(self.hwnd, 9)  # SW_RESTORE
