@@ -81,12 +81,17 @@ try:
 except Exception:
     pass
 
-# 微信图片存储主目录探测
+# 微信图片存储主目录探测 (动态适配 WeChat 3.x 与 WeChat 4.0 全新 xwechat_files 架构)
+USER_HOME = Path(os.environ.get("USERPROFILE", "C:/Users/zima"))
 WECHAT_FILE_DIRS = [
-    Path(os.environ.get("USERPROFILE", "C:/Users/a1634")) / "Documents" / "WeChat Files" / "wxid_zixek3hhdfdv22" / "FileStorage",
-    Path(os.environ.get("USERPROFILE", "C:/Users/a1634")) / "Documents" / "WeChat Files",
+    USER_HOME / "xwechat_files",
+    Path("C:/Users/zima/xwechat_files"),
+    USER_HOME / "Documents" / "xwechat_files",
+    USER_HOME / "Documents" / "WeChat Files",
+    Path("C:/Users/zima/Documents/WeChat Files"),
     Path("E:/WeiXinFILE/xwechat_files"),
-    Path(os.environ.get("USERPROFILE", "C:/Users/a1634")) / "AppData" / "Roaming" / "Tencent" / "WeChat"
+    USER_HOME / "AppData" / "Roaming" / "Tencent" / "WeChat",
+    USER_HOME / "AppData" / "Roaming" / "Tencent" / "xwechat"
 ]
 
 # 时间戳正则
@@ -293,6 +298,18 @@ class ChatSessionState:
     def capture_image_from_control(self, item_obj) -> Path:
         """【自适应背景差分切片】：自动分析投影间隙，精准裁切核心气泡，0像素残留"""
         try:
+            # 0. 物理置顶锁定：强行将本聊天视窗拉至桌面绝对最顶层 (Z-Order 顶死)
+            # 彻底杜绝截到覆盖在上方的 PowerShell、浏览器或其他层叠窗口！
+            try:
+                win32gui.ShowWindow(self.hwnd, 9)  # SW_RESTORE
+                win32gui.ShowWindow(self.hwnd, 5)  # SW_SHOW
+                win32gui.SetWindowPos(self.hwnd, -1, 0, 0, 0, 0, 3)  # HWND_TOPMOST
+                win32gui.BringWindowToTop(self.hwnd)
+                win32gui.SetForegroundWindow(self.hwnd)
+            except Exception:
+                pass
+            time.sleep(0.08)  # 给予 DWM 完整的像素合成刷新时间
+
             raw_temp = Path(f"temp_raw_{int(time.time() * 1000)}.png")
             final_temp = Path(f"temp_img_{int(time.time() * 1000)}.png")
 
@@ -356,6 +373,11 @@ class ChatSessionState:
 
         except Exception as e:
             logger.warning("[%s] Failed to perform adaptive image cropping: %s", self.name, e)
+        finally:
+            try:
+                win32gui.SetWindowPos(self.hwnd, -2, 0, 0, 0, 0, 3)  # HWND_NOTOPMOST 释放绝对顶置
+            except Exception:
+                pass
         return None
 
     def extract_highres_image_dual_engine(self, item_obj) -> Path:
@@ -462,24 +484,8 @@ class ChatSessionState:
                     auto.Click(center_x, center_y)
                     time.sleep(0.06)
 
-                # 4. 剪贴板安全写入锁 (强行覆写并回读校验，彻底防止被 RDP 外部复制串扰)
-                clip_ok = False
-                for _ in range(5):
-                    try:
-                        auto.SetClipboardText(reply_text)
-                        time.sleep(0.04)
-                        # 回读校验：确保剪贴板里的内容 100% 是机器人的回复，而非任何外部误复制
-                        if auto.GetClipboardText() == reply_text:
-                            clip_ok = True
-                            break
-                    except Exception:
-                        time.sleep(0.04)
-
-                if not clip_ok:
-                    logger.warning("[%s] Clipboard lock failed, retrying set clipboard once", self.name)
-                    auto.SetClipboardText(reply_text)
-                    time.sleep(0.06)
-
+                auto.SetClipboardText(reply_text)
+                time.sleep(0.06)
                 auto.SendKeys("{Ctrl}v")
                 # 给予剪贴板和输入框充分的 UI 文本渲染缓冲时间 (120ms)
                 time.sleep(0.12)
