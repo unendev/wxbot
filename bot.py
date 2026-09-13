@@ -462,8 +462,24 @@ class ChatSessionState:
                     auto.Click(center_x, center_y)
                     time.sleep(0.06)
 
-                auto.SetClipboardText(reply_text)
-                time.sleep(0.06)
+                # 4. 剪贴板安全写入锁 (强行覆写并回读校验，彻底防止被 RDP 外部复制串扰)
+                clip_ok = False
+                for _ in range(5):
+                    try:
+                        auto.SetClipboardText(reply_text)
+                        time.sleep(0.04)
+                        # 回读校验：确保剪贴板里的内容 100% 是机器人的回复，而非任何外部误复制
+                        if auto.GetClipboardText() == reply_text:
+                            clip_ok = True
+                            break
+                    except Exception:
+                        time.sleep(0.04)
+
+                if not clip_ok:
+                    logger.warning("[%s] Clipboard lock failed, retrying set clipboard once", self.name)
+                    auto.SetClipboardText(reply_text)
+                    time.sleep(0.06)
+
                 auto.SendKeys("{Ctrl}v")
                 # 给予剪贴板和输入框充分的 UI 文本渲染缓冲时间 (120ms)
                 time.sleep(0.12)
