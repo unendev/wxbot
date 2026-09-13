@@ -14,13 +14,12 @@ import re
 import sys
 import time
 import json
-import queue
 import ctypes
 import threading
 import random
+import logging
 from pathlib import Path
 from collections import deque
-from http.server import HTTPServer, BaseHTTPRequestHandler
 from PIL import Image
 
 # 1. 控制台编码与标准 Logging 初始化
@@ -424,9 +423,14 @@ class ChatSessionState:
         """向当前窗口输入框发送回复 (拟人自然打字时延 + 绝对 Z-Order 顶置 + 控件级焦点死锁 + 智能防串窗)"""
         try:
             # 0. 拟人化自然打字与读题时延注入 (彻底抹除 180字/秒 超人类机器瞬发特征)
-            base_jitter = random.uniform(1.2, 2.5)  # 随机自然思考抖动
-            typing_delay = min(len(reply_text) * 0.025, 3.0)  # 动态打字耗时 (每字约 0.025s，上限 3s)
-            time.sleep(base_jitter + typing_delay)
+            # 真实人类反应：阅读理解/构思时延 (1.8s ~ 3.2s) + 拼音打字速率 (约 0.055s ~ 0.075s/字，平滑上限 6.5s)
+            base_jitter = random.uniform(1.8, 3.2)  # 随机阅读理解与操作思考抖动
+            typing_rate = random.uniform(0.055, 0.075)  # 拟人拼音打字速率 (每字约 55-75ms)
+            typing_delay = min(len(reply_text) * typing_rate, 6.5)  # 动态打字耗时，平滑上限 6.5s
+            total_delay = base_jitter + typing_delay
+            logger.info("[%s] Cadence delay injected: %.2fs (read/jitter: %.2fs, typing: %.2fs for %d chars)", 
+                        self.name, total_delay, base_jitter, typing_delay, len(reply_text))
+            time.sleep(total_delay)
 
             # 1. 绝对 Z-Order 顶置：强行将目标窗口拉到桌面最上层，防止被重叠窗口拦截鼠标
             try:
@@ -490,81 +494,6 @@ class ChatSessionState:
             return False
 
 # =========================================================
-# 微信主动推送网关 (Universal Push Webhook Gateway)
-# =========================================================
-PUSH_PORT = int(os.getenv("PUSH_PORT", "5005"))
-push_tasks_queue = queue.Queue()
-
-class PushWebhookHandler(BaseHTTPRequestHandler):
-    def log_message(self, format, *args):
-        # 静默处理常规 HTTP 访问日志，保持终端清爽
-        return
-
-    def do_POST(self):
-        if self.path in ["/send", "/push"]:
-            try:
-                content_length = int(self.headers.get("Content-Length", 0))
-                body = self.rfile.read(content_length).decode("utf-8")
-                data = json.loads(body)
-
-                target = data.get("target", "").strip()
-                text = data.get("text", "") or data.get("message", "")
-                image_path = data.get("image", "")
-
-                if not target or (not text and not image_path):
-                    self.send_response(400)
-                    self.send_header("Content-Type", "application/json; charset=utf-8")
-                    self.end_headers()
-                    self.wfile.write(json.dumps({"status": "error", "message": "Missing 'target' or 'text' parameter"}, ensure_ascii=False).encode("utf-8"))
-                    return
-
-                resp_event = threading.Event()
-                result_box = {"status": "pending", "message": ""}
-                push_tasks_queue.put((target, text, image_path, resp_event, result_box))
-
-                # 等待主调度引擎执行注入 (最长等待 5 秒)
-                resp_event.wait(timeout=5.0)
-
-                status_code = 200 if result_box["status"] == "ok" else 500
-                self.send_response(status_code)
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.end_headers()
-                self.wfile.write(json.dumps(result_box, ensure_ascii=False).encode("utf-8"))
-            except Exception as e:
-                self.send_response(500)
-                self.send_header("Content-Type", "application/json; charset=utf-8")
-                self.end_headers()
-                self.wfile.write(json.dumps({"status": "error", "message": str(e)}, ensure_ascii=False).encode("utf-8"))
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-    def do_GET(self):
-        if self.path in ["/status", "/"]:
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.end_headers()
-            sessions = [s.name for s in active_sessions.values()]
-            self.wfile.write(json.dumps({
-                "status": "online",
-                "service": "WeChat Bot & Push Webhook Gateway",
-                "port": PUSH_PORT,
-                "active_sessions": sessions
-            }, ensure_ascii=False).encode("utf-8"))
-        else:
-            self.send_response(404)
-            self.end_headers()
-
-def start_push_server():
-    """在后台常驻启动推送网关 Webhook"""
-    try:
-        server = HTTPServer(("0.0.0.0", PUSH_PORT), PushWebhookHandler)
-        logger.info("[PUSH GATEWAY] HTTP Webhook listening on http://0.0.0.0:%d/send", PUSH_PORT)
-        server.serve_forever()
-    except Exception as e:
-        logger.error("[PUSH GATEWAY] Failed to bind port %d: %s", PUSH_PORT, e)
-
-# =========================================================
 # 窗口搜寻与主调度引擎
 # =========================================================
 active_sessions = {}
@@ -616,9 +545,6 @@ def main():
     logger.info("Initializing WeChat Bot (Native UIA Engine)")
     logger.info("Monitoring targets: %s (Group targets: %s)", LISTEN_TARGETS, GROUP_TARGETS)
 
-    # 启动通用主动推送 Webhook 接收服务 (后台守护线程)
-    threading.Thread(target=start_push_server, daemon=True).start()
-
     global active_sessions
 
     while True:
@@ -646,46 +572,6 @@ def main():
                             logger.warning("Discovered window [%s] (HWND: %d) but failed to locate list/edit controls", target_name, hwnd)
                     except Exception as e:
                         logger.warning("Error attaching to window [%s] (HWND: %d): %s", target_name, hwnd, e)
-
-            # -------------------------------------------------------------
-            # 【主动推送网关任务派发调度】
-            # -------------------------------------------------------------
-            while not push_tasks_queue.empty():
-                try:
-                    target_name, push_text, push_img, resp_ev, res_box = push_tasks_queue.get_nowait()
-                    matched_session = None
-
-                    # 1. 优先精确名字全匹配 (如完全匹配 "渥奇")
-                    for s in active_sessions.values():
-                        if target_name == s.name:
-                            matched_session = s
-                            break
-
-                    # 2. 其次非空包含匹配
-                    if not matched_session and target_name:
-                        for s in active_sessions.values():
-                            if target_name in s.name or s.name in target_name:
-                                matched_session = s
-                                break
-
-                    if matched_session:
-                        success = matched_session.send_text_reply(push_text)
-                        if success:
-                            res_box["status"] = "ok"
-                            res_box["message"] = f"Push successfully delivered to [{matched_session.name}]"
-                            logger.info("[PUSH GATEWAY] Delivered push message to [%s]: %s", matched_session.name, push_text[:50])
-                        else:
-                            res_box["status"] = "error"
-                            res_box["message"] = f"Failed to send text to window [{matched_session.name}]"
-                    else:
-                        active_names = [s.name for s in active_sessions.values()]
-                        res_box["status"] = "error"
-                        res_box["message"] = f"Target [{target_name}] not found in active windows {active_names}"
-                        logger.warning("[PUSH GATEWAY] Push target [%s] not found in active windows %s", target_name, active_names)
-
-                    resp_ev.set()
-                except queue.Empty:
-                    break
 
             for hwnd, session in list(active_sessions.items()):
                 session.resolve_real_name()
