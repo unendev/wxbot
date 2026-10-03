@@ -543,6 +543,8 @@ def cleanup_temp_files():
         except Exception:
             pass
 
+APP_AUXILIARY_TITLES = {"微信", "WeChat", "Weixin", "腾讯微信", "Tencent WeChat"}
+
 def scan_matching_windows():
     """扫描所有微信独立聊天视窗与主界面 (全自动发现群聊 + 私聊白名单)"""
     cleanup_temp_files()
@@ -554,7 +556,7 @@ def scan_matching_windows():
             cls = win32gui.GetClassName(hwnd)
 
             # 1. 忽略系统级提示弹窗、音视频通话或无关微信小窗口
-            if any(k in title for k in ["图片查看", "视频播放", "截屏", "设置", "意见反馈", "关于微信"]):
+            if any(k in title for k in ["图片查看", "视频播放", "截屏", "设置", "意见反馈", "关于微信", "订阅号", "视频号"]):
                 return True
 
             rect = win32gui.GetWindowRect(hwnd)
@@ -562,15 +564,15 @@ def scan_matching_windows():
             height = rect[3] - rect[1]
 
             # 2. 识别主窗口
-            if ("WeChat" in cls or "Qt" in cls or "ChatWnd" in cls) and (title in ["微信", "WeChat"] or not title):
+            if ("WeChat" in cls or "Qt" in cls or "ChatWnd" in cls) and (title in APP_AUXILIARY_TITLES or not title):
                 if width > 400 and height > 400:
                     found_hwnds[hwnd] = "主窗口会话"
                     return True
 
             # 3. 识别任何被独立拖出来的聊天会话窗口 (群聊或私聊)
-            # 特征：类名包含 WeChat / Qt / ChatWnd / 或标题非空且具备常规窗口物理尺寸
+            # 特征：类名包含 WeChat / Qt / ChatWnd / 或标题非空且具备常规窗口物理尺寸，且排除微信自身程序主标题及辅助组件
             if ("WeChat" in cls or "Qt" in cls or "ChatWnd" in cls or "Chrome_WidgetWin" in cls):
-                if width > 200 and height > 200 and title and title not in ["微信", "WeChat"]:
+                if width > 200 and height > 200 and title and (title not in APP_AUXILIARY_TITLES):
                     found_hwnds[hwnd] = title
 
         return True
@@ -587,6 +589,7 @@ def main():
     logger.info("Private Targets: %s | Bot Aliases: %s | Group Chats: <Auto-Detect Any Group Window>", PRIVATE_TARGETS, BOT_ALIASES)
 
     global active_sessions
+    unsupported_hwnds = set()
 
     while True:
         try:
@@ -597,8 +600,12 @@ def main():
                     logger.warning("Session detached: [%s] (HWND: %d)", active_sessions[dead_hwnd].name, dead_hwnd)
                     del active_sessions[dead_hwnd]
 
+            for dead_hwnd in list(unsupported_hwnds):
+                if not win32gui.IsWindow(dead_hwnd):
+                    unsupported_hwnds.remove(dead_hwnd)
+
             for hwnd, target_name in discovered.items():
-                if hwnd not in active_sessions:
+                if hwnd not in active_sessions and hwnd not in unsupported_hwnds:
                     try:
                         ctrl = auto.ControlFromHandle(hwnd)
                         session = ChatSessionState(target_name, hwnd, ctrl)
@@ -610,9 +617,11 @@ def main():
                                 session.name, hwnd, "Group" if session.is_group else "Private"
                             )
                         else:
-                            logger.warning("Discovered window [%s] (HWND: %d) but failed to locate list/edit controls", target_name, hwnd)
+                            unsupported_hwnds.add(hwnd)
+                            logger.debug("Discovered window [%s] (HWND: %d) has no list/edit controls, skipping.", target_name, hwnd)
                     except Exception as e:
-                        logger.warning("Error attaching to window [%s] (HWND: %d): %s", target_name, hwnd, e)
+                        unsupported_hwnds.add(hwnd)
+                        logger.debug("Error attaching to window [%s] (HWND: %d): %s", target_name, hwnd, e)
 
             for hwnd, session in list(active_sessions.items()):
                 session.resolve_real_name()
