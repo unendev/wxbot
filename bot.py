@@ -507,17 +507,15 @@ class ChatSessionState:
                 auto.SendKeys("{Enter}")
                 time.sleep(0.08)
 
-                # 【第二重保险：通过当前会话专属发送按钮 / Alt+S 强力兜底】
-                try:
-                    send_btn = self.ctrl.ButtonControl(searchDepth=15, Name="发送")
-                    if not send_btn.Exists(0.05):
-                        send_btn = self.ctrl.ButtonControl(searchDepth=15, Name="发送(S)")
-                    if send_btn.Exists(0.05):
-                        send_btn.Click(simulateMove=False)
-                    else:
-                        auto.SendKeys("{Alt}s")
-                except Exception:
-                    pass
+                # 【第二重保险：适配中英文微信发送按钮 (发送 / 发送(S) / Send)，若仍处于可点击状态则点击兜底】
+                for btn_name in ["发送", "发送(S)", "Send"]:
+                    try:
+                        send_btn = self.ctrl.ButtonControl(searchDepth=15, Name=btn_name)
+                        if send_btn.Exists(0.05) and send_btn.IsEnabled:
+                            send_btn.Click(simulateMove=False)
+                            break
+                    except Exception:
+                        pass
 
                 self.recent_bot_replies.append(reply_text)
                 return True
