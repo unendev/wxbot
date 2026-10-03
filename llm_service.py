@@ -99,13 +99,19 @@ def call_llm(chat_name: str, user_prompt: str, image_path: Path = None) -> str:
         # 兼容简易单文本形式
         final_user_msg = user_prompt if (len(user_content) == 1 and not image_path) else user_content
 
-        # 微信即时聊天字数与精炼度规范 (不限制说话风格与人设，仅约束字数长度，避免冗长)
-        system_brevity_rule = {
+        # 微信即时聊天人格与精炼度规范 (博学严谨、机智风趣、短小精悍)
+        system_persona_rule = {
             "role": "system",
-            "content": "【微信即时聊天字数规范】：回复请保持精炼，日常交流通常控制在 50~100 字以内（言简意赅，不要长篇大论）。唯有在用户明确要求详细分析、总结长文或编写代码时，方可按需展开长篇回复。"
+            "content": (
+                "你是一个博学、严谨且语言机智风趣的百科全书助手。\n"
+                "聊天规范：\n"
+                "1. 简明扼要，直击本质，通俗易懂；日常交流控制在 50~100 字以内，杜绝冗长废话；\n"
+                "2. 不讲无意义的客套开场白，直接给出高质量核心解答；\n"
+                "3. 保持机智、幽默且富有智慧的聊天语气；唯有在用户明确要求详细分析、总结长文或编写代码时，方可按需展开长篇回复。"
+            )
         }
 
-        messages = [system_brevity_rule] + history + [{"role": "user", "content": final_user_msg}]
+        messages = [system_persona_rule] + history + [{"role": "user", "content": final_user_msg}]
         payload = {
             "model": LLM_MODEL,
             "messages": messages,
