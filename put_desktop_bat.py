@@ -15,33 +15,13 @@ for item in sftp.listdir('Desktop'):
         except Exception as e:
             print('[-] Error removing:', item, e)
 
-start_bot_bat = """@echo off
-chcp 65001 >nul
-set PYTHONIOENCODING=utf-8
-set PYTHONUTF8=1
-cd /d "C:\\Users\\zima\\Desktop\\wxbot"
-title WeChat AI Bot (Zimaboard)
-echo ============================================================
-echo   微信 AI 助手 (Zimaboard 原生运行环境)
-echo ============================================================
-echo [*] 正在启动机器人...
-uv.exe run bot.py
-pause
-"""
+start_bot_bat = "@echo off\r\nchcp 65001 >nul\r\nset PYTHONIOENCODING=utf-8\r\nset PYTHONUTF8=1\r\ntitle WeChat AI Bot\r\ncd /d C:\\Users\\zima\\Desktop\\wxbot\r\nuv.exe run bot.py\r\npause\r\n"
 
-disconnect_bat = """@echo off
-fltmc >nul 2>&1 || (
-    powershell -Command "Start-Process cmd -ArgumentList '/c `\"`%~f0`\"' -Verb RunAs"
-    exit /b
-)
+disconnect_bat = "@echo off\r\ntitle Disconnect RDP\r\nfltmc >nul 2>&1 || (\r\n    powershell -Command \"Start-Process cmd -ArgumentList '/c `\"`%~f0`\"' -Verb RunAs\"\r\n    exit /b\r\n)\r\nfor /f \"tokens=3\" %%i in ('query session ^| findstr /i \"Active\"') do (\r\n    tscon %%i /dest:console\r\n)\r\n"
 
-for /f "tokens=3" %%i in ('query session ^| findstr /i "Active"') do (
-    tscon %%i /dest:console
-)
-"""
-
-sftp.putfo(io.BytesIO(start_bot_bat.encode('gbk')), 'Desktop/启动微信AI.bat')
-sftp.putfo(io.BytesIO(disconnect_bat.encode('gbk')), 'Desktop/断开远程桌面(防黑屏).bat')
+# 统一写入英文名 + 中文名，并严格使用纯 ASCII / ANSI 和 Windows 标准 CRLF (\r\n) 换行
+sftp.putfo(io.BytesIO(start_bot_bat.encode('ascii')), 'Desktop/start_bot.bat')
+sftp.putfo(io.BytesIO(disconnect_bat.encode('ascii')), 'Desktop/disconnect_rdp.bat')
 
 print('[+] Desktop items now:', sftp.listdir('Desktop'))
 sftp.close()

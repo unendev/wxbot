@@ -22,10 +22,18 @@ from pathlib import Path
 from collections import deque
 from PIL import Image
 
-# 1. 控制台编码与标准 Logging 初始化
+# 1. 控制台编码与标准 Logging 初始化 (底层强行锁定 Windows 代码页为 65001 UTF-8)
+if sys.platform == "win32":
+    try:
+        ctypes.windll.kernel32.SetConsoleCP(65001)
+        ctypes.windll.kernel32.SetConsoleOutputCP(65001)
+    except Exception:
+        pass
+
 if hasattr(sys.stdout, "reconfigure"):
     try:
         sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
     except Exception:
         pass
 
@@ -41,18 +49,19 @@ import uiautomation as auto
 from llm_service import call_llm
 
 # =========================================================
-# 配置区：监听目标与群聊识别
+# 配置区：全自动群聊发现与私聊免@名单
 # =========================================================
-# 个人私聊目标：自动自由上下文对话
-# 群聊目标：静默维护上下文与图片缓存，必须精准 @ 机器人才会触发作答
-GROUP_TARGETS = ["小丑", "大丑", "小丑之家", "大丑之家", "大白鲨、轩轩、bot", "问问看"]
+# 专属私聊白名单：免 @ 自由双向长上下文对话
 PRIVATE_TARGETS = ["bot", "渥奇", "活出自己"]
 
-LISTEN_TARGETS = PRIVATE_TARGETS + GROUP_TARGETS
-
 # 机器人自身专属外号名单 (群聊中唯有 @ 这些名字才会唤醒机器人，@ 别人 100% 保持静默)
-# 大丑和小丑均识别为机器人自身的名字
-BOT_ALIASES = [a.strip() for a in os.getenv("BOT_ALIASES", "bot,Bot,BOT,大丑,小丑,大白鲨、轩轩、bot,AI,机器人").split(",") if a.strip()]
+# 涵盖：小丑、大丑、中丑、bot、AI、机器人等
+BOT_ALIASES = [
+    a.strip() for a in os.getenv(
+        "BOT_ALIASES", 
+        "bot,Bot,BOT,小丑,大丑,中丑,大白鲨、轩轩、bot,AI,机器人"
+    ).split(",") if a.strip()
+]
 
 # 视觉目标全量标记集合 (覆盖普通图片、高清原图、大表情包、自定义动图表情、英文Sticker等)
 IMAGE_MARKERS = {
@@ -184,8 +193,8 @@ class ChatSessionState:
         self.name = name
         self.hwnd = hwnd
         self.ctrl = ctrl
-        # 凡是名字在 GROUP_TARGETS 中，或包含任何群名称，或带有人数 (数字) 的，100% 铁律锁定为群聊模式！
-        self.is_group = (re.search(r"\(\d+\)", name) is not None) or any(gt in name for gt in GROUP_TARGETS) or (name in GROUP_TARGETS)
+        # 凡是带有人数 (数字) 后缀、或非纯私聊白名单的独立聊天窗口，一律认定为群聊模式 (必须 @ 机器人唤醒)
+        self.is_group = (name not in PRIVATE_TARGETS) or (re.search(r"\(\d+\)", name) is not None)
         self.msg_list_ctrl = None
         self.input_ctrl = None
         self.last_seen_msg_ids = []
@@ -215,22 +224,26 @@ class ChatSessionState:
 
     def resolve_real_name(self) -> str:
         """从微信窗口顶栏动态获取真实联系人/群名称并智能判定群聊属性"""
-        # 凡是带有人数后缀 (数字) 或在群聊名单中的，一律铁律锁定为群聊模式 (必须 @ 唤醒)
-        if re.search(r"\(\d+\)", self.name) or any(gt in self.name for gt in GROUP_TARGETS):
+        # 只要名字不完全等于 PRIVATE_TARGETS 里的白名单，或者带 (数字)，一律为群聊
+        if re.search(r"\(\d+\)", self.name) or (self.name not in PRIVATE_TARGETS and self.name != "主窗口会话"):
             self.is_group = True
 
         if self.name != "主窗口会话":
             return self.name
 
         try:
-            sorted_targets = sorted(LISTEN_TARGETS, key=len, reverse=True)
             for child in self.ctrl.GetChildren():
                 txt = child.Name.strip() if child.Name else ""
-                for target in sorted_targets:
-                    if target in txt:
+                # 如果主窗口顶栏展示了具体私聊或群聊
+                for target in PRIVATE_TARGETS:
+                    if target == txt:
                         self.name = target
-                        self.is_group = re.search(r"\(\d+\)", txt) is not None or any(gt in txt for gt in GROUP_TARGETS)
+                        self.is_group = False
                         return self.name
+                if re.search(r"\(\d+\)", txt):
+                    self.name = txt
+                    self.is_group = True
+                    return self.name
         except Exception:
             pass
         return self.name
@@ -531,7 +544,7 @@ def cleanup_temp_files():
             pass
 
 def scan_matching_windows():
-    """扫描所有匹配目标名字的微信视窗"""
+    """扫描所有微信独立聊天视窗与主界面 (全自动发现群聊 + 私聊白名单)"""
     cleanup_temp_files()
     found_hwnds = {}
 
@@ -540,19 +553,25 @@ def scan_matching_windows():
             title = win32gui.GetWindowText(hwnd).strip()
             cls = win32gui.GetClassName(hwnd)
 
-            # 最长匹配优先：防止 "bot" 误拦截 "大白鲨、轩轩、bot"
-            sorted_targets = sorted(LISTEN_TARGETS, key=len, reverse=True)
-            for target in sorted_targets:
-                if target in title:
-                    rect = win32gui.GetWindowRect(hwnd)
-                    if (rect[2] - rect[0]) > 200 and (rect[3] - rect[1]) > 200:
-                        found_hwnds[hwnd] = target
-                        break
+            # 1. 忽略系统级提示弹窗、音视频通话或无关微信小窗口
+            if any(k in title for k in ["图片查看", "视频播放", "截屏", "设置", "意见反馈", "关于微信"]):
+                return True
 
+            rect = win32gui.GetWindowRect(hwnd)
+            width = rect[2] - rect[0]
+            height = rect[3] - rect[1]
+
+            # 2. 识别主窗口
             if ("WeChat" in cls or "Qt" in cls or "ChatWnd" in cls) and (title in ["微信", "WeChat"] or not title):
-                rect = win32gui.GetWindowRect(hwnd)
-                if (rect[2] - rect[0]) > 400 and (rect[3] - rect[1]) > 400:
+                if width > 400 and height > 400:
                     found_hwnds[hwnd] = "主窗口会话"
+                    return True
+
+            # 3. 识别任何被独立拖出来的聊天会话窗口 (群聊或私聊)
+            # 特征：类名包含 WeChat / Qt / ChatWnd / 或标题非空且具备常规窗口物理尺寸
+            if ("WeChat" in cls or "Qt" in cls or "ChatWnd" in cls or "Chrome_WidgetWin" in cls):
+                if width > 200 and height > 200 and title and title not in ["微信", "WeChat"]:
+                    found_hwnds[hwnd] = title
 
         return True
 
@@ -564,8 +583,8 @@ def scan_matching_windows():
     return found_hwnds
 
 def main():
-    logger.info("Initializing WeChat Bot (Native UIA Engine)")
-    logger.info("Monitoring targets: %s (Group targets: %s)", LISTEN_TARGETS, GROUP_TARGETS)
+    logger.info("Initializing WeChat Bot (Native UIA Universal Engine)")
+    logger.info("Private Targets: %s | Bot Aliases: %s | Group Chats: <Auto-Detect Any Group Window>", PRIVATE_TARGETS, BOT_ALIASES)
 
     global active_sessions
 
